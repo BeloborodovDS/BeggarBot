@@ -14,7 +14,6 @@ int main( int argc, char** argv )
 {    
     //Init camera
     raspicam::RaspiCam_Cv Camera;
-    
     if ( !Camera.open() ) 
     {
         cout<<"Error opening camera"<<endl;
@@ -31,20 +30,22 @@ int main( int argc, char** argv )
 	return 0;
     }
     
-    //Convenience vars
-    cv::Mat1b gray;
-    cv::Mat small;
     
     vector<Rect> detections;
 
-    cv::Mat image;
+    
     
     //Scale ratio for input vodeo frames
-    double shrink = 0.4;
+    double shrink = 0.25;
 
+    
+    cv::Mat image(960, 1280, CV_8UC3);
+    cv::Mat gray(960, 1280, CV_8UC1);
+    cv::Mat small(240, 360, CV_8UC1);
+    
     for (;;) 
     { 
-	try{
+      try{	  
 	  //get frame
 	  Camera.grab();
 	  Camera.retrieve ( image );
@@ -52,12 +53,13 @@ int main( int argc, char** argv )
 	  //transform image and detect face
 	  detections.clear();
 	  cvtColor(image, gray, CV_BGR2GRAY);
-	  resize(gray, small, Size(gray.size[1]*shrink, gray.size[0]*shrink));
+	  resize(gray, small, Size(360,240));
 	  flip(small,small,0);
-	  detector.detectMultiScale(small, detections, 1.15, 3, 0, Size(30,30), Size(200,200));
+	  detector.detectMultiScale(small, detections, 1.1, 2, 0, Size(15,15), Size(150,150));
 	  
 	  //draw face
-	  rectangle(small, detections[0], cv::Scalar(255,0,0));
+	  for (int i=0; i<detections.size(); i++)
+	    rectangle(small, detections[i], cv::Scalar(255,0,0));
 	  imshow("frame",small);
 	  
 	  //break if key pressed
@@ -65,6 +67,7 @@ int main( int argc, char** argv )
 	  {
 	    break;
 	  }
+	  
 	}
 	catch(cv::Exception e)
 	{
@@ -73,9 +76,6 @@ int main( int argc, char** argv )
 	}
     }
     Camera.release();
-    
-    cout<<"resolution: "<<image.rows<<" x "<<image.cols<<endl;
-    cout<<"shrink resolution: "<<small.rows<<" x "<<small.cols<<endl;
     
     return 0;
  
