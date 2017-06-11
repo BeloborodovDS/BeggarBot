@@ -9,11 +9,18 @@
 using namespace cv;
 using namespace std;
 
+#define BB_VIDEO_WIDTH 		360
+#define BB_VIDEO_HEIGHT 	240
+#define BB_MIN_FACE		15
+#define BB_MAX_FACE		150
+
+#define BB_DO_FLIP		1
 
 int main( int argc, char** argv )
 {    
     //Init camera
     raspicam::RaspiCam_Cv Camera;
+    Camera.set ( CV_CAP_PROP_FORMAT, CV_8UC1 ); //grayscale
     if ( !Camera.open() ) 
     {
         cout<<"Error opening camera"<<endl;
@@ -23,25 +30,14 @@ int main( int argc, char** argv )
     
     //Init detector
     CascadeClassifier detector;
-    
     if(!detector.load("./lbpcascade_frontalface.xml"))
     {
 	cout<<"Cannot load detector"<<endl;
 	return 0;
     }
     
-    
     vector<Rect> detections;
-
-    
-    
-    //Scale ratio for input vodeo frames
-    double shrink = 0.25;
-
-    
-    cv::Mat image(960, 1280, CV_8UC3);
-    cv::Mat gray(960, 1280, CV_8UC1);
-    cv::Mat small(240, 360, CV_8UC1);
+    cv::Mat image;
     
     for (;;) 
     { 
@@ -52,15 +48,16 @@ int main( int argc, char** argv )
 	  
 	  //transform image and detect face
 	  detections.clear();
-	  cvtColor(image, gray, CV_BGR2GRAY);
-	  resize(gray, small, Size(360,240));
-	  flip(small,small,0);
-	  detector.detectMultiScale(small, detections, 1.1, 2, 0, Size(15,15), Size(150,150));
+	  resize(image,image,Size(BB_VIDEO_WIDTH,BB_VIDEO_HEIGHT));
+#if BB_DO_FLIP
+	  flip(image,image,0);
+#endif
+	  detector.detectMultiScale(image, detections, 1.1, 2, 0, Size(BB_MIN_FACE,BB_MIN_FACE), Size(BB_MAX_FACE,BB_MAX_FACE));
 	  
 	  //draw face
 	  for (int i=0; i<detections.size(); i++)
-	    rectangle(small, detections[i], cv::Scalar(255,0,0));
-	  imshow("frame",small);
+	    rectangle(image, detections[i], cv::Scalar(255,0,0));
+	  imshow("frame",image);
 	  
 	  //break if key pressed
 	  if(waitKey(1)!=-1)
@@ -75,6 +72,7 @@ int main( int argc, char** argv )
 	  break;
 	}
     }
+    
     Camera.release();
     
     return 0;
