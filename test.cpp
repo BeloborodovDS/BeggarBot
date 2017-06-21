@@ -26,13 +26,24 @@ using namespace std;
 #define PCA_MAX_PWM 4096
 #define PCA_HERTZ 50
 
+//calibrated
+#define SERVO_MS_MIN 0.6
+#define SERVO_MS_MAX 2.4
+
 //drive servo PIN at angle ANGLE for SG90 servo: 1ms=>0deg, 1.5ms=>90deg, 2ms=>180deg
 //angle: [0,180], pin: PIN_BASE(controller)+SERVO_NUM(0-15) or PIN_BASE(controller)+16 for all servos
-int driveDegs(float angle, int pin)
+void driveDegs(float angle, int pin)
 {
   if (angle<0) angle = 0;
   if (angle>180) angle = 180;
-  int ticks = (int)(PCA_MAX_PWM * (angle/180.0f + 1.0f) / 20.0f + 0.5);
+  int ticks = (int)(PCA_MAX_PWM * (angle/180.0f*(SERVO_MS_MAX-SERVO_MS_MIN) + SERVO_MS_MIN) / 20.0f + 0.5);
+  pwmWrite(pin, ticks);
+}
+
+void driveMs(float Ms, int pin)
+{
+  float cycleMs = 1000.0f / PCA_HERTZ;
+  int ticks = (int)(PCA_MAX_PWM * Ms / cycleMs + 0.5f);
   pwmWrite(pin, ticks);
 }
 
@@ -111,23 +122,22 @@ int main( int argc, char** argv )
     pca9685PWMReset(fd);
     
     //drive all servos to 5 deg
-    driveDegs(5, PCA_PIN_BASE + 16);
+    driveDegs(90, PCA_PIN_BASE + 16);
     delay(1000);
-    
+
     while(true)
     {
-      for (int i=0; i<5; i++)
+      for (int i=0; i<4; i++)
       {
 	driveDegs(175, PCA_PIN_BASE + i);
-	delay(200);
+	delay(1000);
       }
-      for (int i=0; i<5; i++)
+      for (int i=0; i<4; i++)
       {
 	driveDegs(5, PCA_PIN_BASE + i);
-	delay(200);
+	delay(1000);
       }
     }
   
     return 0;
- 
 }
