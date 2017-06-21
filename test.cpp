@@ -3,8 +3,13 @@
 #include <opencv2/videoio.hpp>
 #include <opencv2/video.hpp>
 #include <opencv2/objdetect.hpp>
+
 #include <raspicam/raspicam_cv.h>
+
 #include <iostream>
+
+#include "pca9685.h"
+#include <wiringPi.h>
 
 using namespace cv;
 using namespace std;
@@ -16,8 +21,24 @@ using namespace std;
 
 #define BB_DO_FLIP		1
 
+//pca9685 defines
+#define PCA_PIN_BASE 300
+#define PCA_MAX_PWM 4096
+#define PCA_HERTZ 50
+
+/**
+ * Calculate the number of ticks the signal should be high for the required amount of time
+ */
+int calcTicks(float impulseMs, int hertz)
+{
+	float cycleMs = 1000.0f / hertz;
+	return (int)(PCA_MAX_PWM * impulseMs / cycleMs + 0.5f);
+}
+
 int main( int argc, char** argv )
 {    
+    
+  /*
     //Init camera
     raspicam::RaspiCam_Cv Camera;
     Camera.set ( CV_CAP_PROP_FORMAT, CV_8UC1 ); //grayscale
@@ -75,6 +96,42 @@ int main( int argc, char** argv )
     
     Camera.release();
     
+   */
+  
+    // Setup with pinbase 300 and i2c location 0x40 (default for pca9685)
+    // PWM period for SG90 servos is 20ms (50Hz)
+    // Duty cycle for SG90 servos is 1-2ms (-90 -- 90 deg); 1.5 ms is neutral (0 deg)
+    int fd = pca9685Setup(PCA_PIN_BASE, 0x40, PCA_HERTZ);
+    if (fd < 0)
+    {
+	    cout<<"Error in init PCA9685!"<<endl;
+	    return fd;
+    }
+    // Reset all output
+    pca9685PWMReset(fd);
+    
+    //set all to -90
+    int tick = calcTicks(1.1, PCA_HERTZ);
+    pwmWrite(PCA_PIN_BASE + 16, tick);
+    delay(1000);
+    
+    while(true)
+    {
+      tick = calcTicks(1.9, PCA_HERTZ);
+      for (int i=0; i<5; i++)
+      {
+	pwmWrite(PCA_PIN_BASE + i, tick);
+	delay(200);
+      }
+      
+      tick = calcTicks(1.1, PCA_HERTZ);
+      for (int i=0; i<5; i++)
+      {
+	pwmWrite(PCA_PIN_BASE + i, tick);
+	delay(200);
+      }
+    }
+  
     return 0;
  
 }
