@@ -101,7 +101,6 @@ int main( int argc, char** argv )
   
     // Setup with pinbase 300 and i2c location 0x40 (default for pca9685)
     // PWM period for SG90 servos is 20ms (50Hz)
-    // Duty cycle for SG90 servos is 1-2ms (-90 -- 90 deg); 1.5 ms is neutral (0 deg)
     int fd = pca9685Setup(PCA_PIN_BASE, 0x40, PCA_HERTZ);
     if (fd < 0)
     {
