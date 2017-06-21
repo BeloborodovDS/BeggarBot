@@ -26,13 +26,14 @@ using namespace std;
 #define PCA_MAX_PWM 4096
 #define PCA_HERTZ 50
 
-/**
- * Calculate the number of ticks the signal should be high for the required amount of time
- */
-int calcTicks(float impulseMs, int hertz)
+//drive servo PIN at angle ANGLE for SG90 servo: 1ms=>0deg, 1.5ms=>90deg, 2ms=>180deg
+//angle: [0,180], pin: PIN_BASE(controller)+SERVO_NUM(0-15) or PIN_BASE(controller)+16 for all servos
+int driveDegs(float angle, int pin)
 {
-	float cycleMs = 1000.0f / hertz;
-	return (int)(PCA_MAX_PWM * impulseMs / cycleMs + 0.5f);
+  if (angle<0) angle = 0;
+  if (angle>180) angle = 180;
+  int ticks = (int)(PCA_MAX_PWM * (angle/180.0f + 1.0f) / 20.0f + 0.5);
+  pwmWrite(pin, ticks);
 }
 
 int main( int argc, char** argv )
@@ -110,24 +111,20 @@ int main( int argc, char** argv )
     // Reset all output
     pca9685PWMReset(fd);
     
-    //set all to -90
-    int tick = calcTicks(1.1, PCA_HERTZ);
-    pwmWrite(PCA_PIN_BASE + 16, tick);
+    //drive all servos to 5 deg
+    driveDegs(5, PCA_PIN_BASE + 16);
     delay(1000);
     
     while(true)
     {
-      tick = calcTicks(1.9, PCA_HERTZ);
       for (int i=0; i<5; i++)
       {
-	pwmWrite(PCA_PIN_BASE + i, tick);
+	driveDegs(175, PCA_PIN_BASE + i);
 	delay(200);
       }
-      
-      tick = calcTicks(1.1, PCA_HERTZ);
       for (int i=0; i<5; i++)
       {
-	pwmWrite(PCA_PIN_BASE + i, tick);
+	driveDegs(5, PCA_PIN_BASE + i);
 	delay(200);
       }
     }
