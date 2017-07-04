@@ -19,28 +19,33 @@ using namespace std;
 #define BB_MIN_FACE		15
 #define BB_MAX_FACE		150
 
-#define BB_DO_FLIP		1
+#define BB_DO_FLIP		0
 
 //pca9685 defines
 #define PCA_PIN_BASE 		300
-#define PCA_MAX_PWM 		4096
+#define PCA_MAX_PWM 		4096 //max ticks in PWM signal
 #define PCA_HERTZ 		50
 
-//calibrated
+//calibrated: for SG90
 #define SERVO_MS_MIN 		0.6
 #define SERVO_MS_MAX 		2.4
+#define SERVO_MAX_SPEED		0.6 //degrees per ms - from datasheet
+
+#define HEAD_DT			20 //ms time span 
+#define HEAD_MAX_STEP		HEAD_DT * SERVO_MAX_SPEED
 
 //PINS
 #define PIN_EYEBROW 		PCA_PIN_BASE  //eyebrow servo at pin location 0 on PCA controller
+#define PIN_HEAD		PCA_PIN_BASE + 1 //head servo at pin location 1 on PCA controller
 #define PIN_PCA			PCA_PIN_BASE + 16 //all pins on PCA controller 
 
-//drive servo PIN at angle ANGLE for SG90 servo: 1ms=>0deg, 1.5ms=>90deg, 2ms=>180deg
+//drive servo PIN at angle ANGLE for SG90 servo
 //angle: [0,180], pin: PIN_BASE(controller)+SERVO_NUM(0-15) or PIN_BASE(controller)+16 for all servos
 void driveDegs(float angle, int pin)
 {
   if (angle<0) angle = 0;
   if (angle>180) angle = 180;
-  int ticks = (int)(PCA_MAX_PWM * (angle/180.0f*(SERVO_MS_MAX-SERVO_MS_MIN) + SERVO_MS_MIN) / 20.0f + 0.5);
+  int ticks = (int)(PCA_MAX_PWM * (angle/180.0f*(SERVO_MS_MAX-SERVO_MS_MIN) + SERVO_MS_MIN) / 20.0f + 0.5); //20ms is pulse width (~50 hz)
   pwmWrite(pin, ticks);
 }
 
@@ -65,6 +70,49 @@ void frown(int mode)
     driveDegs(100, PIN_EYEBROW);
   delay(1000);
 }
+
+//set initial position
+void resetRobot()
+{
+  driveDegs(90, PIN_HEAD);
+  frown(0);
+  delay(2000);
+}
+
+//Drive head from angle an_from to angle an_to with specified speed
+//speed is ratio from SERVO_MAX_SPEED, in [0,1]
+//!!! valid an_from value must be provided
+void driveHead(float an_from, float an_to, float speed = 0.1)
+{
+  if (speed > 1) speed = 1;
+  if (speed < 0) speed = 0;
+  if (an_to > 135) an_to = 135; //angle is limited in [45, 135] for safety reasons
+  if (an_to < 45) an_to = 45;
+  if (an_from < 0) an_from = 0;
+  if (an_from > 180) an_from = 180;
+  
+  float step = HEAD_MAX_STEP*speed; //deg step for each time span
+  
+  if (an_from < an_to)  
+    while(an_from < an_to) //forward
+    {
+      an_from += step;
+      driveDegs(an_from, PIN_HEAD);
+      delay(HEAD_DT);
+    }
+  else
+    while(an_from > an_to) //backwards
+    {
+      an_from -= step;
+      driveDegs(an_from, PIN_HEAD);
+      delay(HEAD_DT);
+    }
+    
+  //fix imprecise position
+  driveDegs(an_to, PIN_HEAD);
+  delay(HEAD_DT);
+}
+
 
 int main( int argc, char** argv )
 {    
@@ -126,7 +174,7 @@ int main( int argc, char** argv )
     }
     
     Camera.release();
-    
+     speed *= -1;
    */
   
     // Setup with pinbase 300 and i2c location 0x40 (default for pca9685)
@@ -140,17 +188,19 @@ int main( int argc, char** argv )
     // Reset all output
     pca9685PWMReset(pca_fd);
     
-    //drive all servos to 90 deg
-    driveDegs(90, PIN_PCA);
-    delay(2000);
+    resetRobot();
     
-    frown(0);
     frown(1);
     frown(-1);
-    frown(0);
+    
+    driveHead(90, 60);
+    delay(500);
+    driveHead(60, 120);
+    delay(500);
+    driveHead(120, 90);
+    delay(500);
   
-    //reset all servos before exit
-    driveDegs(90, PIN_PCA);
+    resetRobot();
     
     return 0;
 }
