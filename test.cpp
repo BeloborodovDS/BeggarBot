@@ -19,8 +19,6 @@ using namespace std;
 #define BB_MIN_FACE		15
 #define BB_MAX_FACE		150
 
-#define BB_DO_FLIP		0
-
 //pca9685 defines
 #define PCA_PIN_BASE 		300
 #define PCA_MAX_PWM 		4096 //max ticks in PWM signal
@@ -117,7 +115,8 @@ void driveHead(float an_from, float an_to, float speed = 0.1)
 int main( int argc, char** argv )
 {    
     
-  /*
+    //------------------------------------------------INIT-----------------------------------------------------------------
+  
     //Init camera
     raspicam::RaspiCam_Cv Camera;
     Camera.set ( CV_CAP_PROP_FORMAT, CV_8UC1 ); //grayscale
@@ -128,67 +127,60 @@ int main( int argc, char** argv )
     }
     cout<<"Connected to camera ="<<Camera.getId() <<endl;
     
-    //Init detector
+    //Init face detector
     CascadeClassifier detector;
     if(!detector.load("./lbpcascade_frontalface.xml"))
     {
 	cout<<"Cannot load detector"<<endl;
 	return 0;
     }
-    
-    vector<Rect> detections;
-    cv::Mat image;
-    
-    for (;;) 
-    { 
-      try{	  
-	  //get frame
-	  Camera.grab();
-	  Camera.retrieve ( image );
-	  
-	  //transform image and detect face
-	  detections.clear();
-	  resize(image,image,Size(BB_VIDEO_WIDTH,BB_VIDEO_HEIGHT));
-#if BB_DO_FLIP
-	  flip(image,image,0);
-#endif
-	  detector.detectMultiScale(image, detections, 1.1, 2, 0, Size(BB_MIN_FACE,BB_MIN_FACE), Size(BB_MAX_FACE,BB_MAX_FACE));
-	  
-	  //draw face
-	  for (int i=0; i<detections.size(); i++)
-	    rectangle(image, detections[i], cv::Scalar(255,0,0));
-	  imshow("frame",image);
-	  
-	  //break if key pressed
-	  if(waitKey(1)!=-1)
-	  {
-	    break;
-	  }
-	  
-	}
-	catch(cv::Exception e)
-	{
-	  cout<<e.what()<<endl;
-	  break;
-	}
-    }
-    
-    Camera.release();
-     speed *= -1;
-   */
+    cout<<"Face detector loaded"<<endl;
   
-    // Setup with pinbase 300 and i2c location 0x40 (default for pca9685)
+    // Setup PCA with pinbase 300 and i2c location 0x40 (default for pca9685)
     // PWM period for SG90 servos is 20ms (50Hz)
     int pca_fd = pca9685Setup(PCA_PIN_BASE, 0x40, PCA_HERTZ);
     if (pca_fd < 0)
     {
-	    cout<<"Error in init PCA9685!"<<endl;
-	    return pca_fd;
+	cout<<"Error in init PCA9685!"<<endl;
+	return 0;
     }
     // Reset all output
     pca9685PWMReset(pca_fd);
-    
+    cout<<"PCA controller connected"<<endl;
+     
     resetRobot();
+    cout<<"Robot reset"<<endl;
+    
+    //-------------------------------------------------MAIN BODY-----------------------------------------------------------
+    
+    vector<Rect> detections;
+    cv::Mat image;
+    
+    
+    for (int i=0; i<300; i++) 
+    { 	  
+      //get frame
+      Camera.grab();
+      Camera.retrieve ( image );
+      
+      //transform image and detect face
+      detections.clear();
+      resize(image,image,Size(BB_VIDEO_WIDTH,BB_VIDEO_HEIGHT));
+      detector.detectMultiScale(image, detections, 1.05, 3, 0, Size(BB_MIN_FACE,BB_MIN_FACE), Size(BB_MAX_FACE,BB_MAX_FACE));
+      
+      //draw face
+      for (int i=0; i<detections.size(); i++)
+	rectangle(image, detections[i], cv::Scalar(255,0,0));
+      imshow("frame",image);	
+      
+      if(waitKey(1)!=-1)
+      {
+	break;
+      }
+    }
+    
+    delay(1000);    
+    
     
     frown(1);
     frown(-1);
@@ -200,7 +192,9 @@ int main( int argc, char** argv )
     driveHead(120, 90);
     delay(500);
   
+    //--------------------------------------------RESET--------------------------------------------------
     resetRobot();
+    Camera.release();
     
     return 0;
 }
