@@ -29,6 +29,10 @@ using namespace std;
 #define BB_SERVO_MS_MAX 	2.4
 #define BB_SERVO_MAX_SPEED	0.6 //degrees per ms - from datasheet
 
+//from datasheet: for continuous rotation FS5103R
+#define BB_CONT_MS_MIN		1.0
+#define BB_CONT_MS_MAX		2.0
+
 #define BB_HEAD_DT		10 //ms time span 
 #define BB_HEAD_MAX_STEP	BB_HEAD_DT * BB_SERVO_MAX_SPEED
 
@@ -85,14 +89,6 @@ void shake()
   delay(500);
 }
 
-//set initial position
-void resetRobot()
-{
-  driveDegs(60, BB_PIN_HEAD);
-  frown(0);
-  driveDegs(90, BB_PIN_ARM);
-  delay(2000);
-}
 
 //Drive head from angle an_from to angle an_to with specified speed
 //speed is ratio from SERVO_MAX_SPEED, in [0,1]
@@ -128,6 +124,33 @@ void driveHead(float an_from, float an_to, float speed = 0.1)
   delay(BB_HEAD_DT);
 }
 
+//speed: [-1, 1]: 1 => full forward, -1 => full backwards 
+void setSpeedLeft(float speed)
+{
+  if (speed > 1) speed = 1;
+  if (speed < -1) speed = -1;
+  speed *= -1; //symmetry
+  int ticks = (int)(BB_PCA_MAX_PWM * (0.5*(speed+1)*(BB_CONT_MS_MAX-BB_CONT_MS_MIN) + BB_CONT_MS_MIN) / 20.0f + 0.5); //20ms is pulse width (~50 hz)
+  pwmWrite(BB_PIN_LEFT_MOTOR, ticks);
+}
+
+//speed: [-1, 1]: 1 => full forward, -1 => full backwards 
+void setSpeedRight(float speed)
+{
+  if (speed > 1) speed = 1;
+  if (speed < -1) speed = -1;
+  int ticks = (int)(BB_PCA_MAX_PWM * (0.5*(speed+1)*(BB_CONT_MS_MAX-BB_CONT_MS_MIN) + BB_CONT_MS_MIN) / 20.0f + 0.5); //20ms is pulse width (~50 hz)
+  pwmWrite(BB_PIN_RIGHT_MOTOR, ticks);
+}
+
+//set initial position
+void resetRobot()
+{
+  driveDegs(60, BB_PIN_HEAD);
+  frown(0);
+  driveDegs(90, BB_PIN_ARM);
+  delay(2000);
+}
 
 int main( int argc, char** argv )
 {    
@@ -259,6 +282,18 @@ int main( int argc, char** argv )
     delay(500);
 
     shake();    
+    
+    setSpeedLeft(1);
+    setSpeedRight(1);
+    delay(2000);
+    setSpeedLeft(0);
+    setSpeedRight(0);
+    delay(1000);
+    setSpeedLeft(-1);
+    setSpeedRight(-1);
+    delay(2000);
+    setSpeedLeft(0);
+    setSpeedRight(0);
     
     //--------------------------------------------RESET--------------------------------------------------
     resetRobot();
