@@ -79,14 +79,14 @@ void frown(int mode)
 //shake hand
 void shake()
 {
-  driveDegs(45, BB_PIN_ARM);
-  delay(500);
-  driveDegs(135, BB_PIN_ARM);
-  delay(500);
-  driveDegs(45, BB_PIN_ARM);
-  delay(500);
-  driveDegs(135, BB_PIN_ARM);
-  delay(500);
+  driveDegs(65, BB_PIN_ARM);
+  delay(300);
+  driveDegs(115, BB_PIN_ARM);
+  delay(300);
+  driveDegs(65, BB_PIN_ARM);
+  delay(300);
+  driveDegs(115, BB_PIN_ARM);
+  delay(300);
 }
 
 
@@ -129,7 +129,6 @@ void setSpeedLeft(float speed)
 {
   if (speed > 1) speed = 1;
   if (speed < -1) speed = -1;
-  speed *= -1; //symmetry
   int ticks = (int)(BB_PCA_MAX_PWM * (0.5*(speed+1)*(BB_CONT_MS_MAX-BB_CONT_MS_MIN) + BB_CONT_MS_MIN) / 20.0f + 0.5); //20ms is pulse width (~50 hz)
   pwmWrite(BB_PIN_LEFT_MOTOR, ticks);
 }
@@ -139,6 +138,7 @@ void setSpeedRight(float speed)
 {
   if (speed > 1) speed = 1;
   if (speed < -1) speed = -1;
+  speed *= -1; //symmetry
   int ticks = (int)(BB_PCA_MAX_PWM * (0.5*(speed+1)*(BB_CONT_MS_MAX-BB_CONT_MS_MIN) + BB_CONT_MS_MIN) / 20.0f + 0.5); //20ms is pulse width (~50 hz)
   pwmWrite(BB_PIN_RIGHT_MOTOR, ticks);
 }
