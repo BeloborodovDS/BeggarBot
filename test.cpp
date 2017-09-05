@@ -10,6 +10,7 @@
 
 #include "pca9685.h"
 #include <wiringPi.h>
+#include "3rdparty/mcp3008/mcp3008Spi.h"
 
 using namespace cv;
 using namespace std;
@@ -43,6 +44,10 @@ using namespace std;
 #define BB_PIN_LEFT_MOTOR	BB_PCA_PIN_BASE + 3
 #define BB_PIN_RIGHT_MOTOR	BB_PCA_PIN_BASE + 4
 #define BB_PIN_PCA		BB_PCA_PIN_BASE + 16 //all pins on PCA controller 
+
+//ADC
+#define BB_IR_LEFT		0	//Infrared sensors
+#define BB_IR_RIGHT		1
 
 //drive servo PIN at angle ANGLE for SG90 servo
 //angle: [0,180], pin: PIN_BASE(controller)+SERVO_NUM(0-15) or PIN_BASE(controller)+16 for all servos
@@ -79,14 +84,14 @@ void frown(int mode)
 //shake hand
 void shake()
 {
-  driveDegs(65, BB_PIN_ARM);
-  delay(300);
-  driveDegs(115, BB_PIN_ARM);
-  delay(300);
-  driveDegs(65, BB_PIN_ARM);
-  delay(300);
-  driveDegs(115, BB_PIN_ARM);
-  delay(300);
+  driveDegs(70, BB_PIN_ARM);
+  delay(400);
+  driveDegs(110, BB_PIN_ARM);
+  delay(400);
+  driveDegs(70, BB_PIN_ARM);
+  delay(400);
+  driveDegs(110, BB_PIN_ARM);
+  delay(400);
 }
 
 
@@ -143,6 +148,28 @@ void setSpeedRight(float speed)
   pwmWrite(BB_PIN_RIGHT_MOTOR, ticks);
 }
 
+//analog read from MCP3008 ADC chip
+//adc: mcp3008Spi object
+//channel: 0..7
+unsigned int analogRead(mcp3008Spi &adc, unsigned char channel)
+{
+  unsigned char spi_data[3];
+  unsigned int val = 0;
+  
+  if (channel > 8) return -1;
+  //write sequence
+  spi_data[0] = 1;  //start bit
+  spi_data[1] = 0b10000000 |( channel << 4); //mode and channel
+  spi_data[2] = 0; //anything
+  adc.spiWriteRead(spi_data, sizeof(spi_data) );
+  //read value, combine last two bits of second byte with whole third byte
+  val = 0;
+  val = (spi_data[1]<< 8) & 0b1100000000; 
+  val |=  (spi_data[2] & 0xff);
+  
+  return val;
+}
+
 //set initial position
 void resetRobot()
 {
@@ -186,8 +213,12 @@ int main( int argc, char** argv )
     }
     // Reset all output
     pca9685PWMReset(pca_fd);
-    cout<<"PCA controller connected"<<endl;
+    cout<<"PCA9685 controller connected"<<endl;
      
+    //declare and init MCP3008 analog-digital converter with default params
+    mcp3008Spi ADC;
+    cout<<"MCP3008 chip init"<<endl;
+    
     resetRobot();
     cout<<"Robot reset"<<endl;
     
@@ -285,15 +316,25 @@ int main( int argc, char** argv )
     
     setSpeedLeft(1);
     setSpeedRight(1);
-    delay(2000);
+    delay(1000);
     setSpeedLeft(0);
     setSpeedRight(0);
     delay(1000);
     setSpeedLeft(-1);
     setSpeedRight(-1);
-    delay(2000);
+    delay(1000);
     setSpeedLeft(0);
     setSpeedRight(0);
+    
+    //test IR sensors
+    int val1, val2;
+    for (int i=0; i<100; i++)
+    {
+      val1 = analogRead(ADC, BB_IR_LEFT);
+      val2 = analogRead(ADC, BB_IR_RIGHT);
+      cout<<val1<<"  "<<val2<<endl;
+      delay(100);
+    }
     
     //--------------------------------------------RESET--------------------------------------------------
     resetRobot();

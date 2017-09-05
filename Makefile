@@ -4,4 +4,4 @@ all:
 	-lopencv_videoio -lopencv_video -lopencv_objdetect \
 	-lraspicam_cv -lraspicam \
 	-lwiringPiPca9685 -lwiringPi \
-	test.cpp -o bot
+	test.cpp 3rdparty/mcp3008/mcp3008Spi.cpp -o bot
