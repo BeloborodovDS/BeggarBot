@@ -36,6 +36,9 @@ using namespace std;
 
 #define BB_HEAD_DT		10 //ms time span 
 #define BB_HEAD_MAX_STEP	BB_HEAD_DT * BB_SERVO_MAX_SPEED
+#define BB_HEAD_INIT_POS	50.0 //initial angle
+#define BB_HEAD_MIN_LIMIT	40.0
+#define BB_HEAD_MAX_LIMIT	135.0
 
 //PINS
 #define BB_PIN_EYEBROW 		BB_PCA_PIN_BASE  //eyebrow servo at pin location 0 on PCA controller
@@ -102,8 +105,8 @@ void driveHead(float an_from, float an_to, float speed = 0.1)
 {
   if (speed > 1) speed = 1;
   if (speed < 0) speed = 0;
-  if (an_to > 135) an_to = 135; //angle is limited in [45, 135] for safety reasons
-  if (an_to < 45) an_to = 45;
+  if (an_to > BB_HEAD_MAX_LIMIT) an_to = BB_HEAD_MAX_LIMIT; //angle is limited in [45, 135] for safety reasons
+  if (an_to < BB_HEAD_MIN_LIMIT) an_to = BB_HEAD_MIN_LIMIT;
   if (an_from < 0) an_from = 0;
   if (an_from > 180) an_from = 180;
   
@@ -173,7 +176,7 @@ unsigned int analogRead(mcp3008Spi &adc, unsigned char channel)
 //set initial position
 void resetRobot()
 {
-  driveDegs(60, BB_PIN_HEAD);
+  driveDegs(BB_HEAD_INIT_POS, BB_PIN_HEAD);
   frown(0);
   driveDegs(90, BB_PIN_ARM);
   delay(2000);
@@ -302,14 +305,15 @@ int main( int argc, char** argv )
       }
     }
     
+    
     delay(1000);    
     
     frown(1);
     frown(-1);
     
-    driveHead(60, 120);
+    driveHead(BB_HEAD_INIT_POS, 120);
     delay(500);
-    driveHead(120, 60);
+    driveHead(120, BB_HEAD_INIT_POS);
     delay(500);
 
     shake();    
