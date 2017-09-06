@@ -12,6 +12,8 @@
 #include <wiringPi.h>
 #include "3rdparty/mcp3008/mcp3008Spi.h"
 
+#include <pthread.h>
+
 using namespace cv;
 using namespace std;
 
@@ -51,6 +53,15 @@ using namespace std;
 //ADC
 #define BB_IR_LEFT		0	//Infrared sensors
 #define BB_IR_RIGHT		1
+
+//struct to pass pointers to face detection thread
+struct facePointersType
+{
+  raspicam::RaspiCam_Cv *camera;
+  CascadeClassifier     *detector;
+};
+
+float g_headPos;
 
 //drive servo PIN at angle ANGLE for SG90 servo
 //angle: [0,180], pin: PIN_BASE(controller)+SERVO_NUM(0-15) or PIN_BASE(controller)+16 for all servos
@@ -173,6 +184,89 @@ unsigned int analogRead(mcp3008Spi &adc, unsigned char channel)
   return val;
 }
 
+void *detectFace(void* pointers)
+{
+  facePointersType* pnts = (facePointersType*)pointers;
+  vector<Rect> detections;
+  cv::Mat image;
+  cv::Point face_coord = cv::Point(BB_VIDEO_WIDTH/2, BB_VIDEO_HEIGHT/2); //initial previous face is in the center
+  bool tracking = false;
+  int n_det = 0, n_nodet = 0; //number of detection/no-detections in a row
+  
+  for (int i=0; i<60; i++) 
+  { 	  
+    //get frame
+    pnts->camera->grab();
+    pnts->camera->retrieve(image);
+    
+    //transform image and detect face
+    detections.clear();
+    resize(image,image,Size(BB_VIDEO_WIDTH,BB_VIDEO_HEIGHT));
+    pnts->detector->detectMultiScale(image, detections, 1.1, 3, 0, Size(BB_MIN_FACE,BB_MIN_FACE), Size(BB_MAX_FACE,BB_MAX_FACE));
+    
+    //if have detections
+    if (detections.size() > 0)
+    {
+      float best_dist = 1000000;
+      float dist = 0;
+      cv::Point best_coord = cv::Point();
+      //find closest detection to previous detection:
+      for (int i=0; i<detections.size(); i++)
+      {
+	cv::Point center = 0.5*(detections[i].tl() + detections[i].br()); 
+	dist = (face_coord.x-center.x)*(face_coord.x-center.x) + (face_coord.y-center.y)*(face_coord.y-center.y);
+	if (dist<best_dist)
+	{
+	  best_dist = dist;
+	  best_coord = center;
+	}
+      }
+      
+      face_coord = best_coord; //set new previous detection
+      n_det++; //one more frame with detections
+      n_nodet=0; //no-detection sequence interrupted
+    }
+    else
+    {
+      n_nodet++; //one more frame without detections
+      n_det=0; //detection sequence interrupted
+    }
+    
+    if (!tracking) //not tracking face now
+    {
+      if(n_det>3) //long detection sequence => start tracking
+      {
+	n_nodet = 0;
+	tracking = true;
+      }
+    }
+    else
+    {
+      if(n_nodet>20) //long no-detection sequence => drop tracking
+      {
+	n_det = 0;
+	tracking = false;
+      }
+    }
+      
+    if (tracking)
+      cout<<i<<" "<<face_coord.x<<"  "<<face_coord.y<<endl;
+    else
+      cout<<i<<" -"<<endl;
+  }
+  
+  pthread_exit(NULL);
+}
+
+void* simpleHeadMove(void* nothing)
+{
+  driveHead(BB_HEAD_INIT_POS, 120);
+  usleep(500);
+  driveHead(120, BB_HEAD_INIT_POS);
+  usleep(500);
+  pthread_exit(NULL);
+}
+
 //set initial position
 void resetRobot()
 {
@@ -181,6 +275,8 @@ void resetRobot()
   driveDegs(90, BB_PIN_ARM);
   delay(2000);
 }
+
+
 
 int main( int argc, char** argv )
 {    
@@ -205,6 +301,11 @@ int main( int argc, char** argv )
 	return 0;
     }
     cout<<"Face detector loaded"<<endl;
+    
+    //pointers to pass to face detection thread
+    facePointersType facePointers;
+    facePointers.camera = &Camera;
+    facePointers.detector = &detector;
   
     // Setup PCA with pinbase 300 and i2c location 0x40 (default for pca9685)
     // PWM period for SG90 servos is 20ms (50Hz)
@@ -225,8 +326,36 @@ int main( int argc, char** argv )
     resetRobot();
     cout<<"Robot reset"<<endl;
     
+    g_headPos = BB_HEAD_INIT_POS;
     //-------------------------------------------------MAIN BODY-----------------------------------------------------------
     
+    //fill attributes to create joinable threads
+    pthread_attr_t threadAttr;
+    pthread_attr_init(&threadAttr);
+    pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_JOINABLE);
+    
+    //creadte threads
+    pthread_t threadFaceDetection, threadHeadRotation;
+    int err = 0;
+    err = pthread_create(&threadFaceDetection, &threadAttr, detectFace, (void*)&facePointers);
+    if (err)
+      cout<<"Fail to create face detection process with code "<<err<<endl;
+    err = pthread_create(&threadHeadRotation, &threadAttr, simpleHeadMove, NULL);
+    if (err)
+      cout<<"Fail to create head rotation process with code "<<err<<endl;
+    
+    pthread_attr_destroy(&threadAttr);
+    
+    //join threads
+    err = pthread_join(threadFaceDetection, NULL);
+    if (err)
+      cout<<"Fail to join face detection process with code "<<err<<endl;
+    err = pthread_join(threadHeadRotation, NULL);
+    if (err)
+      cout<<"Fail to join head rotation process with code "<<err<<endl;
+    
+    
+    /*
     vector<Rect> detections;
     cv::Mat image;
     cv::Point face_coord = cv::Point(BB_VIDEO_WIDTH/2, BB_VIDEO_HEIGHT/2); //initial previous face is in the center
@@ -339,9 +468,10 @@ int main( int argc, char** argv )
       cout<<val1<<"  "<<val2<<endl;
       delay(100);
     }
-    
+    */
     //--------------------------------------------RESET--------------------------------------------------
     resetRobot();
+    cout<<"Final reset."<<endl;
     Camera.release();
     
     return 0;
