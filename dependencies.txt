@@ -1,5 +1,5 @@
 wiringPi
-OpenCV
-raspicam 0.1.6
+OpenCV 2.4
+raspicam 0.1.6: http://www.uco.es/investiga/grupos/ava/node/40
 PCA9685 PWM controller: https://github.com/Reinbert/pca9685
 MCP3008 ADC chip: https://github.com/halherta/RaspberryPi-mcp3008Spi

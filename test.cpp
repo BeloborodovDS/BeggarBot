@@ -1,8 +1,8 @@
-#include <opencv2/core.hpp>
-#include <opencv2/highgui.hpp>
-#include <opencv2/videoio.hpp>
-#include <opencv2/video.hpp>
-#include <opencv2/objdetect.hpp>
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
+//#include <opencv2/videoio/videoio.hpp>
+#include <opencv2/video/video.hpp>
+#include <opencv2/objdetect/objdetect.hpp>
 
 #include <raspicam/raspicam_cv.h>
 
@@ -307,6 +307,9 @@ int main( int argc, char** argv )
     facePointers.camera = &Camera;
     facePointers.detector = &detector;
   
+    //setup WiringPi
+    wiringPiSetup();
+    
     // Setup PCA with pinbase 300 and i2c location 0x40 (default for pca9685)
     // PWM period for SG90 servos is 20ms (50Hz)
     int pca_fd = pca9685Setup(BB_PCA_PIN_BASE, 0x40, BB_PCA_HERTZ);
@@ -329,6 +332,7 @@ int main( int argc, char** argv )
     g_headPos = BB_HEAD_INIT_POS;
     //-------------------------------------------------MAIN BODY-----------------------------------------------------------
     
+    /*
     //fill attributes to create joinable threads
     pthread_attr_t threadAttr;
     pthread_attr_init(&threadAttr);
@@ -353,9 +357,9 @@ int main( int argc, char** argv )
     err = pthread_join(threadHeadRotation, NULL);
     if (err)
       cout<<"Fail to join head rotation process with code "<<err<<endl;
+    //*/
     
     
-    /*
     vector<Rect> detections;
     cv::Mat image;
     cv::Point face_coord = cv::Point(BB_VIDEO_WIDTH/2, BB_VIDEO_HEIGHT/2); //initial previous face is in the center
@@ -468,7 +472,7 @@ int main( int argc, char** argv )
       cout<<val1<<"  "<<val2<<endl;
       delay(100);
     }
-    */
+    //*/
     //--------------------------------------------RESET--------------------------------------------------
     resetRobot();
     cout<<"Final reset."<<endl;
