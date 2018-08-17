@@ -1,6 +1,5 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
-//#include <opencv2/videoio/videoio.hpp>
 #include <opencv2/video/video.hpp>
 #include <opencv2/objdetect/objdetect.hpp>
 
@@ -297,8 +296,8 @@ int main( int argc, char** argv )
     CascadeClassifier detector;
     if(!detector.load("./lbpcascade_frontalface.xml"))
     {
-	cout<<"Cannot load detector"<<endl;
-	return 0;
+        cout<<"Cannot load detector"<<endl;
+        return 0;
     }
     cout<<"Face detector loaded"<<endl;
     
@@ -315,8 +314,8 @@ int main( int argc, char** argv )
     int pca_fd = pca9685Setup(BB_PCA_PIN_BASE, 0x40, BB_PCA_HERTZ);
     if (pca_fd < 0)
     {
-	cout<<"Error in init PCA9685!"<<endl;
-	return 0;
+        cout<<"Error in init PCA9685!"<<endl;
+        return 0;
     }
     // Reset all output
     pca9685PWMReset(pca_fd);

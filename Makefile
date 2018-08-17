@@ -6,3 +6,8 @@ all:
 	-lraspicam_cv -lraspicam \
 	-lwiringPiPca9685 -lwiringPi \
 	test.cpp 3rdparty/mcp3008/mcp3008Spi.cpp -o bot
+ncs:
+	g++ -I/usr/local/include -I. -L/usr/local/lib \
+	-lopencv_core -lopencv_highgui -lopencv_imgproc -lopencv_video \
+	-lraspicam_cv -lraspicam -lmvnc \
+	ncs_test.cpp ./ncs_wrapper/ncs_wrapper.cpp -o bot
