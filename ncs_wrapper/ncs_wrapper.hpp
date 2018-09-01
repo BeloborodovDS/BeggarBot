@@ -46,6 +46,10 @@ public:
      */
     bool get_result(float*& output);
     
+    /*print internal error code
+     */
+    void print_error_code();
+    
     //return code for MVNC functions
     ncStatus_t ncsCode;
     //device handle

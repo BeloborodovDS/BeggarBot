@@ -242,5 +242,78 @@ bool NCSWrapper::get_result(float*& output)
     return true;
 }
 
-
+void NCSWrapper::print_error_code()
+{
+    cout<<"NCSWrapper error report:\n";
+    
+    if (ncsCode == NC_MYRIAD_ERROR)
+    {
+        char* err = new char [NC_DEBUG_BUFFER_SIZE];
+        unsigned int len;
+        ncGraphGetOption(ncsGraph, NC_RO_GRAPH_DEBUG_INFO, err, &len);
+        cout<<"MYRIAD ERROR:\n";
+        cout<<string(err, len)<<endl;
+        delete [] err;
+    }
+    else if (ncsCode == NC_OK)
+    {
+        cout<<"Everything is fine, no error\n";
+    }
+    else if (ncsCode == NC_BUSY)
+    {
+        cout<<"NCS is busy\n";
+    }
+    else if (ncsCode == NC_ERROR)
+    {
+        cout<<"UNKNOWN ERROR during function call\n";
+    }
+    else if (ncsCode == NC_OUT_OF_MEMORY)
+    {
+        cout<<"Host out of memory\n";
+    }
+    else if (ncsCode == NC_DEVICE_NOT_FOUND)
+    {
+        cout<<"Device not found\n";
+    }
+    else if (ncsCode == NC_INVALID_PARAMETERS)
+    {
+        cout<<"Invalid function parameters\n";
+    }
+    else if (ncsCode == NC_TIMEOUT)
+    {
+        cout<<"Timeout in device communication\n";
+    }
+    else if (ncsCode == NC_MVCMD_NOT_FOUND)
+    {
+        cout<<"Device boot file not found (installation is broken)\n";
+    }
+    else if (ncsCode == NC_NOT_ALLOCATED)
+    {
+        cout<<"Graph or FIFO not allocated\n";
+    }
+    else if (ncsCode == NC_UNAUTHORIZED)
+    {
+        cout<<"Unauthorized operation attempted\n";
+    }
+    else if (ncsCode == NC_UNSUPPORTED_GRAPH_FILE)
+    {
+        cout<<"Unsupported graph file (compiled with different NCSDK version)\n";
+    }
+    else if (ncsCode == NC_UNSUPPORTED_FEATURE)
+    {
+        cout<<"Operation not supported by firmware\n";
+    }
+    else if (ncsCode == NC_INVALID_DATA_LENGTH)
+    {
+        cout<<"Invalid data length\n";
+    }
+    else if (ncsCode == NC_INVALID_HANDLE)
+    {
+        cout<<"Invalid data length passed to function\n";
+    }
+    else
+    {
+        cout<<"Some other error occured, unknown code "<<ncsCode<<endl;
+    }
+}
 
