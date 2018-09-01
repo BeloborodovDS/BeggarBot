@@ -28,14 +28,14 @@ pthread_mutex_t face_vector_mutex;    //mutex for shared face vectors (probs and
 
 /* Struct to pass to threads
  * camera: pointer to RaspiCam camera
- * image: pointer to shared image buffer
+ * buffers: pointer to shared image buffers
  * ncs: pointer to NCSWrapper instance
  * faces, probs: pointers to shared face and prob vectors
  */
 struct thread_pointers_t
 {
     raspicam::RaspiCam *camera;
-    float *image;
+    float **buffers;
     NCSWrapper *ncs;
     vector<Rect> *faces;
     vector<float> *probs;
@@ -79,11 +79,7 @@ void* get_frames(void* pointers)
     thread_pointers_t* pnt = (thread_pointers_t*) pointers;
     unsigned char* frame_data; //raw frame
     Mat resized_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_8UC3); //resized frame
-    
-    //Create Mat for existing shared image buffer (for convenience)
-    pthread_mutex_lock(&image_buffer_mutex);
-    Mat float_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_32FC3, pnt->image);
-    pthread_mutex_unlock(&image_buffer_mutex);
+    float *swap = NULL;
     
     while(is_running)
     {
@@ -91,14 +87,20 @@ void* get_frames(void* pointers)
         pnt->camera->grab();
         frame_data = pnt->camera->getImageBufferData();
         Mat frame(BB_RAW_HEIGHT, BB_RAW_WIDTH, CV_8UC3, frame_data);
+        //Create Mats for existing shared image buffers (for convenience)
+        Mat float_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_32FC3, pnt->buffers[0]);
         
         //resize frame
         resize(frame, resized_frame, Size(BB_VIDEO_WIDTH,BB_VIDEO_HEIGHT));
-        
         //cast resized frame to [-1.0, 1.0] with shared buffer destination
-        pthread_mutex_lock(&image_buffer_mutex);
         resized_frame.convertTo(float_frame, CV_32F, 1/127.5, -1);
-        pthread_mutex_unlock(&image_buffer_mutex);
+        
+        //swap buffers
+        //pthread_mutex_lock(&image_buffer_mutex);
+        swap = pnt->buffers[0];
+        pnt->buffers[0] = pnt->buffers[1];
+        pnt->buffers[1] = swap;
+        //pthread_mutex_unlock(&image_buffer_mutex);
         
         nframes++;
         usleep(1000);
@@ -124,9 +126,9 @@ void* detect_faces(void* pointers)
     while(is_running)
     {
         //load image into NCS
-        pthread_mutex_lock(&image_buffer_mutex);
-        success = pnt->ncs->load_tensor_nowait(pnt->image);
-        pthread_mutex_unlock(&image_buffer_mutex);
+        //pthread_mutex_lock(&image_buffer_mutex);
+        success = pnt->ncs->load_tensor_nowait(pnt->buffers[1]);
+        //pthread_mutex_unlock(&image_buffer_mutex);
         if(!success)
         {
             pnt->ncs->print_error_code();
@@ -162,14 +164,20 @@ int main()
     pthread_mutex_init(&image_buffer_mutex, NULL);
     pthread_mutex_init(&face_vector_mutex, NULL);
     
-    //allocate and reset SHARED image buffer
-    float* image_buffer = new float [BB_VIDEO_WIDTH*BB_VIDEO_HEIGHT*3];
-    for (int i=0; i<BB_VIDEO_WIDTH*BB_VIDEO_HEIGHT*3; i++)
-        image_buffer[i] = 0;
+    //allocate and reset SHARED image buffers
+    //use buffer 0 to write transformed data
+    //use buffer 1 to read data
+    float* image_buffers[2]; 
+    for (int k=0; k<2; k++)
+    {
+        image_buffers[k] = new float [BB_VIDEO_WIDTH*BB_VIDEO_HEIGHT*3];
+        for (int i=0; i<BB_VIDEO_WIDTH*BB_VIDEO_HEIGHT*3; i++)
+            image_buffers[k][i] = 0;
+    }
     
     //Convenience Mats
     Mat display_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_32FC3);
-    Mat float_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_32FC3, image_buffer); // SHARED
+    Mat float_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_32FC3, image_buffers[1]); // SHARED
     
     //SHARED face and prob vectors
     vector<Rect> face_vector;
@@ -203,7 +211,7 @@ int main()
         {
             //setup structure to pass to threads
             thread_pointers_t thread_pointers;
-            thread_pointers.image = image_buffer;
+            thread_pointers.buffers = image_buffers;
             thread_pointers.camera = &Camera;
             thread_pointers.ncs = &NCS;
             thread_pointers.faces = &face_vector;
@@ -231,9 +239,9 @@ int main()
             for(;;)
             {
                 //get shared image and convert it
-                pthread_mutex_lock(&image_buffer_mutex);
+                //pthread_mutex_lock(&image_buffer_mutex);
                 float_frame.convertTo(display_frame, CV_32F, 0.5, 0.5);
-                pthread_mutex_unlock(&image_buffer_mutex);
+                //pthread_mutex_unlock(&image_buffer_mutex);
                 
                 //draw faces from shared vectors
                 pthread_mutex_lock(&face_vector_mutex);
@@ -267,7 +275,8 @@ int main()
     }
     
     //cleanup
-    delete [] image_buffer;
+    delete [] image_buffers[0];
+    delete [] image_buffers[1];
     
     pthread_mutex_destroy(&image_buffer_mutex);
     pthread_mutex_destroy(&face_vector_mutex);
