@@ -29,6 +29,7 @@ pthread_mutex_t face_vector_mutex;    //mutex for shared face vectors (probs and
 /* Struct to pass to threads
  * camera: pointer to RaspiCam camera
  * buffers: pointer to shared image buffers
+ * bufcnt: counter of filled buffers
  * ncs: pointer to NCSWrapper instance
  * faces, probs: pointers to shared face and prob vectors
  */
@@ -36,6 +37,7 @@ struct thread_pointers_t
 {
     raspicam::RaspiCam *camera;
     float **buffers;
+    int *bufcnt;
     NCSWrapper *ncs;
     vector<Rect> *faces;
     vector<float> *probs;
@@ -86,22 +88,25 @@ void* get_frames(void* pointers)
         //get raw frame and create Mat for it
         pnt->camera->grab();
         frame_data = pnt->camera->getImageBufferData();
-        Mat frame(BB_RAW_HEIGHT, BB_RAW_WIDTH, CV_8UC3, frame_data);
-        //Create Mats for existing shared image buffers (for convenience)
-        Mat float_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_32FC3, pnt->buffers[0]);
-        
-        //resize frame
-        resize(frame, resized_frame, Size(BB_VIDEO_WIDTH,BB_VIDEO_HEIGHT));
-        //cast resized frame to [-1.0, 1.0] with shared buffer destination
-        resized_frame.convertTo(float_frame, CV_32F, 1/127.5, -1);
-        
-        //swap buffers
-        //pthread_mutex_lock(&image_buffer_mutex);
-        swap = pnt->buffers[0];
-        pnt->buffers[0] = pnt->buffers[1];
-        pnt->buffers[1] = swap;
-        //pthread_mutex_unlock(&image_buffer_mutex);
-        
+        if (*(pnt->bufcnt)<1)
+        {
+            Mat frame(BB_RAW_HEIGHT, BB_RAW_WIDTH, CV_8UC3, frame_data);
+            //Create Mats for existing shared image buffers (for convenience)
+            Mat float_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_32FC3, pnt->buffers[0]);
+            
+            //resize frame
+            resize(frame, resized_frame, Size(BB_VIDEO_WIDTH,BB_VIDEO_HEIGHT));
+            //cast resized frame to [-1.0, 1.0] with shared buffer destination
+            resized_frame.convertTo(float_frame, CV_32F, 1/127.5, -1);
+            
+            //swap buffers
+            //pthread_mutex_lock(&image_buffer_mutex);
+            swap = pnt->buffers[0];
+            pnt->buffers[0] = pnt->buffers[1];
+            pnt->buffers[1] = swap;
+            *(pnt->bufcnt)+=1;
+            //pthread_mutex_unlock(&image_buffer_mutex);
+        }
         nframes++;
         usleep(1000);
     }
@@ -125,29 +130,33 @@ void* detect_faces(void* pointers)
     
     while(is_running)
     {
-        //load image into NCS
-        //pthread_mutex_lock(&image_buffer_mutex);
-        success = pnt->ncs->load_tensor_nowait(pnt->buffers[1]);
-        //pthread_mutex_unlock(&image_buffer_mutex);
-        if(!success)
+        if (*(pnt->bufcnt)>=1)
         {
-            pnt->ncs->print_error_code();
-            break;
+            //load image into NCS
+            //pthread_mutex_lock(&image_buffer_mutex);
+            success = pnt->ncs->load_tensor_nowait(pnt->buffers[1]);
+            *(pnt->bufcnt)-=1;
+            //pthread_mutex_unlock(&image_buffer_mutex);
+            if(!success)
+            {
+                pnt->ncs->print_error_code();
+                break;
+            }
+            //now LOCK until result arrives
+            if(!pnt->ncs->get_result(ncs_output))
+            {
+                pnt->ncs->print_error_code();
+                break;
+            }
+            //get result into shared vactors
+            pthread_mutex_lock(&face_vector_mutex);
+            pnt->faces->clear();
+            pnt->probs->clear();
+            get_detection_boxes(ncs_output, BB_VIDEO_WIDTH, BB_VIDEO_HEIGHT, 0.3, *(pnt->probs), *(pnt->faces));
+            pthread_mutex_unlock(&face_vector_mutex);
+            
+            nframes++;
         }
-        //now LOCK until result arrives
-        if(!pnt->ncs->get_result(ncs_output))
-        {
-            pnt->ncs->print_error_code();
-            break;
-        }
-        //get result into shared vactors
-        pthread_mutex_lock(&face_vector_mutex);
-        pnt->faces->clear();
-        pnt->probs->clear();
-        get_detection_boxes(ncs_output, BB_VIDEO_WIDTH, BB_VIDEO_HEIGHT, 0.3, *(pnt->probs), *(pnt->faces));
-        pthread_mutex_unlock(&face_vector_mutex);
-        
-        nframes++;
         usleep(1000);
     }
     //report fps and exit
@@ -168,6 +177,7 @@ int main()
     //use buffer 0 to write transformed data
     //use buffer 1 to read data
     float* image_buffers[2]; 
+    int buffer_count = 0;
     for (int k=0; k<2; k++)
     {
         image_buffers[k] = new float [BB_VIDEO_WIDTH*BB_VIDEO_HEIGHT*3];
@@ -212,6 +222,7 @@ int main()
             //setup structure to pass to threads
             thread_pointers_t thread_pointers;
             thread_pointers.buffers = image_buffers;
+            thread_pointers.bufcnt = &buffer_count;
             thread_pointers.camera = &Camera;
             thread_pointers.ncs = &NCS;
             thread_pointers.faces = &face_vector;
