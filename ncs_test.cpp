@@ -1,11 +1,13 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/video/video.hpp>
+#include <opencv2/tracking/tracking.hpp>
 
 #include <raspicam/raspicam.h>
 
 #include <iostream>
 #include <fstream>
+#include <set>
 
 #include <pthread.h>
 #include <unistd.h>
@@ -21,6 +23,9 @@ using namespace std;
 #define BB_RAW_WIDTH                     1280
 #define BB_RAW_HEIGHT                    960
 #define NETWORK_OUTPUT_SIZE     707
+#define MAX_TRACKED_FACES           3
+#define MAX_DETECTIONS_MISSED  10
+
 
 volatile bool is_running;  //used to stop threads from main()
 pthread_mutex_t image_buffer_mutex; //mutex for shared image buffer
@@ -32,6 +37,7 @@ pthread_mutex_t face_vector_mutex;    //mutex for shared face vectors (probs and
  * bufcnt: counter of filled buffers
  * ncs: pointer to NCSWrapper instance
  * faces, probs: pointers to shared face and prob vectors
+ * trfaces, trprobs: pointers to tracked faces and auxilary values
  */
 struct thread_pointers_t
 {
@@ -41,7 +47,17 @@ struct thread_pointers_t
     NCSWrapper *ncs;
     vector<Rect> *faces;
     vector<float> *probs;
+    vector<Rect2d> *trfaces;
+    vector<float> *trprobs;
 };
+
+//calc IOU between two rects
+float rect_iou(Rect rect1, Rect rect2)
+{
+    float inter = (rect1 & rect2).area();
+    if (inter <= 0) return 0;
+    return inter/(rect1.area() + rect2.area() - inter);
+}
 
 /*Calculate detected bboxes and corresponding probabilities from NCS output 
  * predictions: raw output from NCS (pointer)
@@ -79,35 +95,74 @@ void* get_frames(void* pointers)
     int64 start = getTickCount();
     
     thread_pointers_t* pnt = (thread_pointers_t*) pointers;
-    unsigned char* frame_data; //raw frame
+    unsigned char* frame_data = NULL; //raw frame
     Mat resized_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_8UC3); //resized frame
+    Mat resized_frame1(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_8UC3); //previous resized frame for trackers
+    resized_frame = Scalar(0);
+    resized_frame1 = Scalar(0);
     float *swap = NULL;
+    int i=0;
     
     while(is_running)
     {
-        //get raw frame and create Mat for it
-        pnt->camera->grab();
-        frame_data = pnt->camera->getImageBufferData();
         if (*(pnt->bufcnt)<1)
         {
+            //for each face slot, try tracking face if slot is not empty, clear slot if unsuccessfull
+            pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
+            for (i=0; i<MAX_TRACKED_FACES; i++)
+            {
+                Rect2d current = (*(pnt->trfaces))[i];
+                if (current.area()>0) //if there is a face to track
+                {
+                    //create a new tracker 
+                    Ptr<TrackerMOSSE> tracker = TrackerMOSSE::create();
+                    //normally this should be true
+                    if (tracker->init(resized_frame, current)) 
+                    {
+                        //if tracking successfull: update slot
+                        if (tracker->update(resized_frame1, current)) 
+                        {
+                            (*(pnt->trfaces))[i] = current;
+                            (*(pnt->trprobs))[i] = 1;
+                        }
+                        else //remember that tracking failed
+                        {
+                            (*(pnt->trprobs))[i] = -1;
+                        }
+                    }
+                    else //init failed
+                    {
+                        (*(pnt->trfaces))[i] = Rect2d();
+                        cout << "FAIL: init tracker\n";
+                    }
+                }
+            }
+            pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
+            
+            //get raw frame and create Mat for it
+            pnt->camera->grab();           
+            frame_data = pnt->camera->getImageBufferData();
+            
             Mat frame(BB_RAW_HEIGHT, BB_RAW_WIDTH, CV_8UC3, frame_data);
             //Create Mats for existing shared image buffers (for convenience)
             Mat float_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_32FC3, pnt->buffers[0]);
             
             //resize frame
-            resize(frame, resized_frame, Size(BB_VIDEO_WIDTH,BB_VIDEO_HEIGHT));
+            resize(frame, resized_frame, Size(BB_VIDEO_WIDTH,BB_VIDEO_HEIGHT), 0, 0, INTER_NEAREST);
             //cast resized frame to [-1.0, 1.0] with shared buffer destination
             resized_frame.convertTo(float_frame, CV_32F, 1/127.5, -1);
             
-            //swap buffers
+            //swap buffers and frames for trackers
             //pthread_mutex_lock(&image_buffer_mutex);
             swap = pnt->buffers[0];
             pnt->buffers[0] = pnt->buffers[1];
             pnt->buffers[1] = swap;
             *(pnt->bufcnt)+=1;
+            cv::swap(resized_frame, resized_frame1);
             //pthread_mutex_unlock(&image_buffer_mutex);
+            
+            nframes++;
         }
-        nframes++;
         usleep(1000);
     }
     //report fps and exit
@@ -128,10 +183,14 @@ void* detect_faces(void* pointers)
     float* ncs_output = NULL; //ncs output buffer is provided by wrapper
     bool success = false;
     
+    //for detection matching
+    std::set<int> indices;
+    int i = 0;
+    
     while(is_running)
     {
         if (*(pnt->bufcnt)>=1)
-        {
+        {            
             //load image into NCS
             //pthread_mutex_lock(&image_buffer_mutex);
             success = pnt->ncs->load_tensor_nowait(pnt->buffers[1]);
@@ -142,22 +201,79 @@ void* detect_faces(void* pointers)
                 pnt->ncs->print_error_code();
                 break;
             }
+            
             //now LOCK until result arrives
             if(!pnt->ncs->get_result(ncs_output))
             {
                 pnt->ncs->print_error_code();
                 break;
             }
+            
             //get result into shared vactors
-            pthread_mutex_lock(&face_vector_mutex);
+            pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
+            
+            // 1) get detections from NCS
             pnt->faces->clear();
             pnt->probs->clear();
             get_detection_boxes(ncs_output, BB_VIDEO_WIDTH, BB_VIDEO_HEIGHT, 0.3, *(pnt->probs), *(pnt->faces));
-            pthread_mutex_unlock(&face_vector_mutex);
+            
+            //init detection indices set
+            for (i=0; i<pnt->faces->size(); i++)
+                indices.insert(i);
+            
+            // 2) Match tracked faces (slots) with detections
+            for (i=0; i<MAX_TRACKED_FACES; i++)
+            {
+                Rect2d current = (*(pnt->trfaces))[i];
+                if (current.area()>0) //if not empty slot
+                {
+                    float max_iou = 0;
+                    int match = -1;
+                    //find detection with greatest IOU
+                    for (auto it = indices.begin(); it!= indices.end(); ++it)
+                    {
+                        float iou = rect_iou(current, (*(pnt->faces))[*it]);
+                        if (iou>max_iou)
+                        {
+                            max_iou = iou; match = *it;
+                        }
+                    }
+                    //if best detection really overlaps, match it with slot and remove its index (so it wont match again)
+                    if (max_iou > 0.1)
+                    {
+                        (*(pnt->trfaces))[i] = (*(pnt->faces))[match];
+                        indices.erase(match);
+                    }
+                    else if ((*(pnt->trprobs))[i] < 0) //if tracking failed too: reset slot
+                    {
+                        //cout << "LOST face in slot "<<i<<"\n";
+                        (*(pnt->trfaces))[i] = Rect2d();
+                    }
+                    //else //if tracking successfull: leave detection in slot
+                        //cout << "REUSING TRACKED face in slot "<<i<<"\n";
+                }
+            }
+            
+            // 3) For empty slots - match remaining faces in order of occurence, erase their indices
+            for (i=0; i<MAX_TRACKED_FACES; i++)
+            {
+                Rect2d current = (*(pnt->trfaces))[i];
+                if (current.area()<=0) //if empty slot
+                {
+                    if (indices.empty())
+                        break;
+                    (*(pnt->trfaces))[i] = (*(pnt->faces))[*indices.begin()];
+                    indices.erase(indices.begin());
+                }
+            }
+            
+            pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
+            
+            indices.clear(); 
             
             nframes++;
         }
-        usleep(1000);
+        //usleep(1000);
     }
     //report fps and exit
     double time = (getTickCount()-start)/getTickFrequency();
@@ -192,6 +308,10 @@ int main()
     //SHARED face and prob vectors
     vector<Rect> face_vector;
     vector<float> prob_vector;
+    //SHARED tracked_faces vector
+    vector<Rect2d> tracked_faces(MAX_TRACKED_FACES);
+    vector<float> tracked_probs(MAX_TRACKED_FACES);
+    cout <<"Set up to track "<<tracked_faces.size()<<" faces\n";
     
     //setup camera
     raspicam::RaspiCam Camera;
@@ -227,6 +347,8 @@ int main()
             thread_pointers.ncs = &NCS;
             thread_pointers.faces = &face_vector;
             thread_pointers.probs = &prob_vector;
+            thread_pointers.trfaces = &tracked_faces;
+            thread_pointers.trprobs = &tracked_probs;
             
             //set threads to be JOINABLE
             pthread_attr_t threadAttr;
@@ -256,10 +378,12 @@ int main()
                 
                 //draw faces from shared vectors
                 pthread_mutex_lock(&face_vector_mutex);
-                for (int i=0; i<face_vector.size(); i++)
+                //for (int i=0; i<face_vector.size(); i++)
+                for (int i=0; i<tracked_faces.size(); i++)
                 {
-                    if (prob_vector[i]>0) 
-                        rectangle(display_frame, face_vector[i], Scalar(0,0,1.0));
+                    rectangle(display_frame, tracked_faces[i], Scalar(0,0,1.0));
+                    //if (prob_vector[i]>0) 
+                        //rectangle(display_frame, face_vector[i], Scalar(0,0,1.0));
                 }
                 pthread_mutex_unlock(&face_vector_mutex);
                 
