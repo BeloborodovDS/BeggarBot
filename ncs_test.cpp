@@ -1,7 +1,6 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/video/video.hpp>
-#include <opencv2/tracking/tracking.hpp>
 
 #include <raspicam/raspicam.h>
 
@@ -48,7 +47,6 @@ struct thread_pointers_t
     vector<Rect> *faces;
     vector<float> *probs;
     vector<Rect2d> *trfaces;
-    vector<float> *trprobs;
 };
 
 //calc IOU between two rects
@@ -105,9 +103,7 @@ void* get_frames(void* pointers)
     thread_pointers_t* pnt = (thread_pointers_t*) pointers;
     unsigned char* frame_data = NULL; //raw frame
     Mat resized_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_8UC3); //resized frame
-    Mat resized_frame1(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_8UC3); //previous resized frame for trackers
     resized_frame = Scalar(0);
-    resized_frame1 = Scalar(0);
     float *swap = NULL;
     int i=0;
     
@@ -115,38 +111,6 @@ void* get_frames(void* pointers)
     {
         if (*(pnt->bufcnt)<1)
         {
-            //for each face slot, try tracking face if slot is not empty, clear slot if unsuccessfull
-            pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
-            for (i=0; i<MAX_TRACKED_FACES; i++)
-            {
-                Rect2d current = (*(pnt->trfaces))[i];
-                if (current.area()>0) //if there is a face to track
-                {
-                    //create a new tracker 
-                    Ptr<TrackerMOSSE> tracker = TrackerMOSSE::create();
-                    //normally this should be true
-                    if (tracker->init(resized_frame, current)) 
-                    {
-                        //if tracking successfull: update slot
-                        if (tracker->update(resized_frame1, current)) 
-                        {
-                            (*(pnt->trfaces))[i] = current;
-                            (*(pnt->trprobs))[i] = 1;
-                        }
-                        else //remember that tracking failed
-                        {
-                            (*(pnt->trprobs))[i] = -1;
-                        }
-                    }
-                    else //init failed
-                    {
-                        (*(pnt->trfaces))[i] = Rect2d();
-                        cout << "FAIL: init tracker\n";
-                    }
-                }
-            }
-            pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
-            
             //get raw frame and create Mat for it
             pnt->camera->grab();           
             frame_data = pnt->camera->getImageBufferData();
@@ -166,7 +130,6 @@ void* get_frames(void* pointers)
             pnt->buffers[0] = pnt->buffers[1];
             pnt->buffers[1] = swap;
             *(pnt->bufcnt)+=1;
-            cv::swap(resized_frame, resized_frame1);
             //pthread_mutex_unlock(&image_buffer_mutex);
             
             nframes++;
@@ -238,7 +201,7 @@ void* detect_faces(void* pointers)
                 {
                     float min_dist = 1000000;
                     int match = -1;
-                    //find detection with greatest IOU
+                    //find detection with min distance
                     for (auto it = indices.begin(); it!= indices.end(); ++it)
                     {
                         float dist = rect_dist(current, (*(pnt->faces))[*it]);
@@ -249,13 +212,13 @@ void* detect_faces(void* pointers)
                     }
                     if (match != -1) //if matched face
                     {
-                        if (rect_iou(current, (*(pnt->faces))[match])>0.1) //if matched face intersects face in slot
+                        if (rect_iou(current, (*(pnt->faces))[match])>0) //if matched face intersects face in slot
                             (*(pnt->trfaces))[i] = (*(pnt->faces))[match];      //update face in slot
-                        else if ((*(pnt->trprobs))[i] < 0)                                  //else if traching failed
+                        else 
                             miss_cnt[i] += 1;                                                       //record failure
                         indices.erase(match);                                                   //remove index so face wont match again
                     }
-                    else if ((*(pnt->trprobs))[i] < 0) //esle if tracking failed
+                    else //esle if tracking failed
                         miss_cnt[i] += 1;                       //record failure
                     
                     //if any slot fails several times in a row, reset it
@@ -323,14 +286,13 @@ int main()
     vector<float> prob_vector;
     //SHARED tracked_faces vector
     vector<Rect2d> tracked_faces(MAX_TRACKED_FACES);
-    vector<float> tracked_probs(MAX_TRACKED_FACES);
     cout <<"Set up to track "<<tracked_faces.size()<<" faces\n";
     
     //setup camera
     raspicam::RaspiCam Camera;
-    Camera.setContrast(50);
-    Camera.setISO(500);
-    Camera.setSaturation(-20);
+    Camera.setContrast(100);//50
+    Camera.setISO(800);//500
+    Camera.setSaturation(-100);//-20
     Camera.setVideoStabilization(true);
     Camera.setExposure(raspicam::RASPICAM_EXPOSURE_ANTISHAKE);
     Camera.setAWB(raspicam::RASPICAM_AWB_AUTO);
@@ -361,7 +323,6 @@ int main()
             thread_pointers.faces = &face_vector;
             thread_pointers.probs = &prob_vector;
             thread_pointers.trfaces = &tracked_faces;
-            thread_pointers.trprobs = &tracked_probs;
             
             //set threads to be JOINABLE
             pthread_attr_t threadAttr;
