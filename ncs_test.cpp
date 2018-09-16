@@ -24,7 +24,7 @@ using namespace std;
 #define BB_RAW_HEIGHT                    960
 #define NETWORK_OUTPUT_SIZE     707
 #define MAX_TRACKED_FACES           3
-#define MAX_DETECTIONS_MISSED  10
+#define MAX_DETECTIONS_MISSED  8
 
 
 volatile bool is_running;  //used to stop threads from main()
@@ -57,6 +57,14 @@ float rect_iou(Rect rect1, Rect rect2)
     float inter = (rect1 & rect2).area();
     if (inter <= 0) return 0;
     return inter/(rect1.area() + rect2.area() - inter);
+}
+
+//calc distance between two rects
+float rect_dist(Rect rect1, Rect rect2)
+{
+    Point p1 = 0.5*(rect1.tl()+rect1.br());
+    Point p2 = 0.5*(rect2.tl()+rect2.br());
+    return sqrt((p1.x-p2.x)*(p1.x-p2.x)+(p1.y-p2.y)*(p1.y-p2.y));
 }
 
 /*Calculate detected bboxes and corresponding probabilities from NCS output 
@@ -186,6 +194,7 @@ void* detect_faces(void* pointers)
     //for detection matching
     std::set<int> indices;
     int i = 0;
+    vector<int> miss_cnt(MAX_TRACKED_FACES);
     
     while(is_running)
     {
@@ -215,7 +224,7 @@ void* detect_faces(void* pointers)
             // 1) get detections from NCS
             pnt->faces->clear();
             pnt->probs->clear();
-            get_detection_boxes(ncs_output, BB_VIDEO_WIDTH, BB_VIDEO_HEIGHT, 0.3, *(pnt->probs), *(pnt->faces));
+            get_detection_boxes(ncs_output, BB_VIDEO_WIDTH, BB_VIDEO_HEIGHT, 0.2, *(pnt->probs), *(pnt->faces));
             
             //init detection indices set
             for (i=0; i<pnt->faces->size(); i++)
@@ -227,30 +236,34 @@ void* detect_faces(void* pointers)
                 Rect2d current = (*(pnt->trfaces))[i];
                 if (current.area()>0) //if not empty slot
                 {
-                    float max_iou = 0;
+                    float min_dist = 1000000;
                     int match = -1;
                     //find detection with greatest IOU
                     for (auto it = indices.begin(); it!= indices.end(); ++it)
                     {
-                        float iou = rect_iou(current, (*(pnt->faces))[*it]);
-                        if (iou>max_iou)
+                        float dist = rect_dist(current, (*(pnt->faces))[*it]);
+                        if (dist<min_dist)
                         {
-                            max_iou = iou; match = *it;
+                            min_dist = dist; match = *it;
                         }
                     }
-                    //if best detection really overlaps, match it with slot and remove its index (so it wont match again)
-                    if (max_iou > 0.1)
+                    if (match != -1) //if matched face
                     {
-                        (*(pnt->trfaces))[i] = (*(pnt->faces))[match];
-                        indices.erase(match);
+                        if (rect_iou(current, (*(pnt->faces))[match])>0.1) //if matched face intersects face in slot
+                            (*(pnt->trfaces))[i] = (*(pnt->faces))[match];      //update face in slot
+                        else if ((*(pnt->trprobs))[i] < 0)                                  //else if traching failed
+                            miss_cnt[i] += 1;                                                       //record failure
+                        indices.erase(match);                                                   //remove index so face wont match again
                     }
-                    else if ((*(pnt->trprobs))[i] < 0) //if tracking failed too: reset slot
+                    else if ((*(pnt->trprobs))[i] < 0) //esle if tracking failed
+                        miss_cnt[i] += 1;                       //record failure
+                    
+                    //if any slot fails several times in a row, reset it
+                    if (miss_cnt[i]>MAX_DETECTIONS_MISSED)
                     {
-                        //cout << "LOST face in slot "<<i<<"\n";
+                        miss_cnt[i] = 0;
                         (*(pnt->trfaces))[i] = Rect2d();
                     }
-                    //else //if tracking successfull: leave detection in slot
-                        //cout << "REUSING TRACKED face in slot "<<i<<"\n";
                 }
             }
             
@@ -368,6 +381,10 @@ int main()
             //cleanup
             pthread_attr_destroy(&threadAttr);
             
+            vector<Scalar> colors;
+            colors.push_back(Scalar(1.0,0,0));
+            colors.push_back(Scalar(0,1.0,0));
+            colors.push_back(Scalar(0,0,1.0));
             //rendering cycle
             for(;;)
             {
@@ -381,7 +398,7 @@ int main()
                 //for (int i=0; i<face_vector.size(); i++)
                 for (int i=0; i<tracked_faces.size(); i++)
                 {
-                    rectangle(display_frame, tracked_faces[i], Scalar(0,0,1.0));
+                    rectangle(display_frame, tracked_faces[i], colors[i]);
                     //if (prob_vector[i]>0) 
                         //rectangle(display_frame, face_vector[i], Scalar(0,0,1.0));
                 }
