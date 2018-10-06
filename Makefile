@@ -5,7 +5,7 @@ all:
 	-lopencv_video -lopencv_objdetect \
 	-lraspicam \
 	-lwiringPiPca9685 -lwiringPi \
-	test.cpp 3rdparty/mcp3008/mcp3008Spi.cpp -o bot
+	test.cpp submodules/mcp3008/mcp3008Spi.cpp -o bot
 ncs:
 	g++ -I/usr/local/include -I. -L/usr/local/lib \
 	-pthread \

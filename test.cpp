@@ -9,7 +9,7 @@
 
 #include "pca9685.h"
 #include <wiringPi.h>
-#include "3rdparty/mcp3008/mcp3008Spi.h"
+#include "submodules/mcp3008/mcp3008Spi.h"
 
 #include <pthread.h>
 
