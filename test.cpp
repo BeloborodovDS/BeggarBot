@@ -3,7 +3,7 @@
 #include <opencv2/video/video.hpp>
 #include <opencv2/objdetect/objdetect.hpp>
 
-#include <raspicam/raspicam_cv.h>
+#include <raspicam/raspicam.h>
 
 #include <iostream>
 
@@ -16,10 +16,13 @@
 using namespace cv;
 using namespace std;
 
-#define BB_VIDEO_WIDTH 		360
-#define BB_VIDEO_HEIGHT 	240
-#define BB_MIN_FACE		15
-#define BB_MAX_FACE		150
+#define BB_VIDEO_WIDTH 		               360
+#define BB_VIDEO_HEIGHT 	               240
+#define BB_MIN_FACE		                       15
+#define BB_MAX_FACE		                   150
+
+#define BB_RAW_WIDTH                        1280
+#define BB_RAW_HEIGHT                       960
 
 //pca9685 defines
 #define BB_PCA_PIN_BASE 	300
@@ -56,7 +59,7 @@ using namespace std;
 //struct to pass pointers to face detection thread
 struct facePointersType
 {
-  raspicam::RaspiCam_Cv *camera;
+  raspicam::RaspiCam *camera;
   CascadeClassifier     *detector;
 };
 
@@ -187,7 +190,7 @@ void *detectFace(void* pointers)
 {
   facePointersType* pnts = (facePointersType*)pointers;
   vector<Rect> detections;
-  cv::Mat image;
+  unsigned char* image_data = NULL;
   cv::Point face_coord = cv::Point(BB_VIDEO_WIDTH/2, BB_VIDEO_HEIGHT/2); //initial previous face is in the center
   bool tracking = false;
   int n_det = 0, n_nodet = 0; //number of detection/no-detections in a row
@@ -196,7 +199,9 @@ void *detectFace(void* pointers)
   { 	  
     //get frame
     pnts->camera->grab();
-    pnts->camera->retrieve(image);
+    image_data = pnts->camera->getImageBufferData();
+    Mat image(BB_RAW_HEIGHT, BB_RAW_WIDTH, CV_8UC3, image_data);
+    cvtColor(image, image, CV_RGB2GRAY);
     
     //transform image and detect face
     detections.clear();
@@ -212,13 +217,13 @@ void *detectFace(void* pointers)
       //find closest detection to previous detection:
       for (int i=0; i<detections.size(); i++)
       {
-	cv::Point center = 0.5*(detections[i].tl() + detections[i].br()); 
-	dist = (face_coord.x-center.x)*(face_coord.x-center.x) + (face_coord.y-center.y)*(face_coord.y-center.y);
-	if (dist<best_dist)
-	{
-	  best_dist = dist;
-	  best_coord = center;
-	}
+        cv::Point center = 0.5*(detections[i].tl() + detections[i].br()); 
+        dist = (face_coord.x-center.x)*(face_coord.x-center.x) + (face_coord.y-center.y)*(face_coord.y-center.y);
+        if (dist<best_dist)
+        {
+            best_dist = dist;
+            best_coord = center;
+        }
       }
       
       face_coord = best_coord; //set new previous detection
@@ -235,16 +240,16 @@ void *detectFace(void* pointers)
     {
       if(n_det>3) //long detection sequence => start tracking
       {
-	n_nodet = 0;
-	tracking = true;
+        n_nodet = 0;
+        tracking = true;
       }
     }
     else
     {
       if(n_nodet>20) //long no-detection sequence => drop tracking
       {
-	n_det = 0;
-	tracking = false;
+        n_det = 0;
+        tracking = false;
       }
     }
       
@@ -283,8 +288,15 @@ int main( int argc, char** argv )
     //------------------------------------------------INIT-----------------------------------------------------------------
   
     //Init camera
-    raspicam::RaspiCam_Cv Camera;
-    Camera.set ( CV_CAP_PROP_FORMAT, CV_8UC1 ); //grayscale
+    //setup camera
+    raspicam::RaspiCam Camera;
+    Camera.setContrast(100);//50
+    Camera.setISO(800);//500
+    Camera.setSaturation(-100);//-20
+    Camera.setVideoStabilization(true);
+    Camera.setExposure(raspicam::RASPICAM_EXPOSURE_ANTISHAKE);
+    Camera.setAWB(raspicam::RASPICAM_AWB_AUTO);
+    
     if ( !Camera.open() ) 
     {
         cout<<"Error opening camera"<<endl;
@@ -356,11 +368,10 @@ int main( int argc, char** argv )
     err = pthread_join(threadHeadRotation, NULL);
     if (err)
       cout<<"Fail to join head rotation process with code "<<err<<endl;
-    //*/
-    
+    */
     
     vector<Rect> detections;
-    cv::Mat image;
+    unsigned char* image_data = NULL; 
     cv::Point face_coord = cv::Point(BB_VIDEO_WIDTH/2, BB_VIDEO_HEIGHT/2); //initial previous face is in the center
     bool tracking = false;
     int n_det = 0, n_nodet = 0; //number of detection/no-detections in a row
@@ -369,7 +380,9 @@ int main( int argc, char** argv )
     { 	  
       //get frame
       Camera.grab();
-      Camera.retrieve ( image );
+      image_data = Camera.getImageBufferData();
+      Mat image(BB_RAW_HEIGHT, BB_RAW_WIDTH, CV_8UC3, image_data);
+      cvtColor(image, image, CV_RGB2GRAY);
       
       //transform image and detect face
       detections.clear();
@@ -379,61 +392,61 @@ int main( int argc, char** argv )
       //if have detections
       if (detections.size() > 0)
       {
-	float best_dist = 1000000;
-	float dist = 0;
-	cv::Point best_coord = cv::Point();
-	//find closest detection to previous detection:
-	for (int i=0; i<detections.size(); i++)
-	{
-	  cv::Point center = 0.5*(detections[i].tl() + detections[i].br()); 
-	  dist = (face_coord.x-center.x)*(face_coord.x-center.x) + (face_coord.y-center.y)*(face_coord.y-center.y);
-	  if (dist<best_dist)
-	  {
-	    best_dist = dist;
-	    best_coord = center;
-	  }
-	}
-	
-	face_coord = best_coord; //set new previous detection
-	n_det++; //one more frame with detections
-	n_nodet=0; //no-detection sequence interrupted
+        float best_dist = 1000000;
+        float dist = 0;
+        cv::Point best_coord = cv::Point();
+        //find closest detection to previous detection:
+        for (int i=0; i<detections.size(); i++)
+        {
+        cv::Point center = 0.5*(detections[i].tl() + detections[i].br()); 
+        dist = (face_coord.x-center.x)*(face_coord.x-center.x) + (face_coord.y-center.y)*(face_coord.y-center.y);
+        if (dist<best_dist)
+        {
+            best_dist = dist;
+            best_coord = center;
+        }
+        }
+        
+        face_coord = best_coord; //set new previous detection
+        n_det++; //one more frame with detections
+        n_nodet=0; //no-detection sequence interrupted
       }
       else
       {
-	n_nodet++; //one more frame without detections
-	n_det=0; //detection sequence interrupted
+        n_nodet++; //one more frame without detections
+        n_det=0; //detection sequence interrupted
       }
       
       if (!tracking) //not tracking face now
       {
-	if(n_det>3) //long detection sequence => start tracking
-	{
-	  n_nodet = 0;
-	  tracking = true;
-	}
+        if(n_det>3) //long detection sequence => start tracking
+        {
+        n_nodet = 0;
+        tracking = true;
+        }
       }
       else
       {
-	if(n_nodet>20) //long no-detection sequence => drop tracking
-	{
-	  n_det = 0;
-	  tracking = false;
-	}
+        if(n_nodet>20) //long no-detection sequence => drop tracking
+        {
+        n_det = 0;
+        tracking = false;
+        }
       }
-	
+
       //draw
       if (tracking && detections.size()>0)
-	cv::circle(image, face_coord, 7, cv::Scalar(255,255,255), -1);
+        cv::circle(image, face_coord, 7, cv::Scalar(255,255,255), -1);
       if (tracking && detections.size()==0)
-	cv::circle(image, face_coord, 3, cv::Scalar(255,255,255), -1);
+        cv::circle(image, face_coord, 3, cv::Scalar(255,255,255), -1);
 
       for (int i=0; i<detections.size(); i++)
-	rectangle(image, detections[i], cv::Scalar(255,0,0));
+        rectangle(image, detections[i], cv::Scalar(255,0,0));
       imshow("frame",image);	
       
       if(waitKey(1)!=-1)
       {
-	break;
+        break;
       }
     }
     
