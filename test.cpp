@@ -461,7 +461,7 @@ int main( int argc, char** argv )
     driveHead(120, BB_HEAD_INIT_POS);
     delay(500);
 
-    shake();    
+    shake();
     
     setSpeedLeft(1);
     setSpeedRight(1);

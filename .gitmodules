@@ -1,3 +1,6 @@
 [submodule "submodules/mcp3008"]
 	path = submodules/mcp3008
 	url = https://github.com/halherta/RaspberryPi-mcp3008Spi
+[submodule "sort-cpp"]
+	path = submodules/sort-cpp
+	url = https://github.com/BeloborodovDS/sort-cpp.git

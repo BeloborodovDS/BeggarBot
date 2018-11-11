@@ -11,4 +11,8 @@ ncs:
 	-pthread \
 	-lopencv_core -lopencv_highgui -lopencv_imgproc -lopencv_video \
 	-lraspicam -lmvnc \
-	ncs_test.cpp ./ncs_wrapper/ncs_wrapper.cpp -o bot
+	ncs_test.cpp ./ncs_wrapper/ncs_wrapper.cpp \
+	submodules/sort-cpp/sort-c++/SORTtracker.cpp \
+	submodules/sort-cpp/sort-c++/Hungarian.cpp \
+	submodules/sort-cpp/sort-c++/KalmanTracker.cpp \
+	-Wno-psabi -o bot

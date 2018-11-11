@@ -14,6 +14,8 @@
 #include <mvnc.h>
 #include "ncs_wrapper/ncs_wrapper.hpp"
 
+#include "submodules/sort-cpp/sort-c++/SORTtracker.h"
+
 using namespace cv;
 using namespace std;
 
@@ -22,11 +24,15 @@ using namespace std;
 #define BB_RAW_WIDTH                     1280
 #define BB_RAW_HEIGHT                    960
 #define NETWORK_OUTPUT_SIZE     707
-#define MAX_TRACKED_FACES           3
-#define MAX_DETECTIONS_MISSED  8
+
+//#define TRACKING_MAX_TRACKED_FACES           3
+#define TRACKING_MAX_AGE          8
+#define TRACKING_MIN_HITS          5
+#define TRACKING_MIN_IOU            0.05
+#define TRACKING_NUM_COLORS  20
 
 
-volatile bool is_running;  //used to stop threads from main()
+volatile bool is_running;  //is used to stop threads from main()
 pthread_mutex_t image_buffer_mutex; //mutex for shared image buffer
 pthread_mutex_t face_vector_mutex;    //mutex for shared face vectors (probs and faces)
 
@@ -46,7 +52,7 @@ struct thread_pointers_t
     NCSWrapper *ncs;
     vector<Rect> *faces;
     vector<float> *probs;
-    vector<Rect2d> *trfaces;
+    vector<TrackingBox> *trfaces;
 };
 
 //calc IOU between two rects
@@ -105,7 +111,6 @@ void* get_frames(void* pointers)
     Mat resized_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_8UC3); //resized frame
     resized_frame = Scalar(0);
     float *swap = NULL;
-    int i=0;
     
     while(is_running)
     {
@@ -124,7 +129,7 @@ void* get_frames(void* pointers)
             //cast resized frame to [-1.0, 1.0] with shared buffer destination
             resized_frame.convertTo(float_frame, CV_32F, 1/127.5, -1);
             
-            //swap buffers and frames for trackers
+            //swap buffers
             //pthread_mutex_lock(&image_buffer_mutex);
             swap = pnt->buffers[0];
             pnt->buffers[0] = pnt->buffers[1];
@@ -154,10 +159,10 @@ void* detect_faces(void* pointers)
     float* ncs_output = NULL; //ncs output buffer is provided by wrapper
     bool success = false;
     
-    //for detection matching
-    std::set<int> indices;
-    int i = 0;
-    vector<int> miss_cnt(MAX_TRACKED_FACES);
+    SORTtracker tracker(TRACKING_MAX_AGE, TRACKING_MIN_HITS, TRACKING_MIN_IOU);
+    //flag used to init tracker
+    bool first_detections = true;
+    vector<Rect_<float> > tmp_det;
     
     while(is_running)
     {
@@ -184,69 +189,36 @@ void* detect_faces(void* pointers)
             //get result into shared vactors
             pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
             
-            // 1) get detections from NCS
+            //get detections from NCS
             pnt->faces->clear();
             pnt->probs->clear();
+            tmp_det.clear();
             get_detection_boxes(ncs_output, BB_VIDEO_WIDTH, BB_VIDEO_HEIGHT, 0.2, *(pnt->probs), *(pnt->faces));
             
-            //init detection indices set
-            for (i=0; i<pnt->faces->size(); i++)
-                indices.insert(i);
-            
-            // 2) Match tracked faces (slots) with detections
-            for (i=0; i<MAX_TRACKED_FACES; i++)
+            //copy to tmp_det to transform type
+            for (int i=0; i<pnt->faces->size(); i++)
             {
-                Rect2d current = (*(pnt->trfaces))[i];
-                if (current.area()>0) //if not empty slot
-                {
-                    float min_dist = 1000000;
-                    int match = -1;
-                    //find detection with min distance
-                    for (auto it = indices.begin(); it!= indices.end(); ++it)
-                    {
-                        float dist = rect_dist(current, (*(pnt->faces))[*it]);
-                        if (dist<min_dist)
-                        {
-                            min_dist = dist; match = *it;
-                        }
-                    }
-                    if (match != -1) //if matched face
-                    {
-                        if (rect_iou(current, (*(pnt->faces))[match])>0) //if matched face intersects face in slot
-                            (*(pnt->trfaces))[i] = (*(pnt->faces))[match];      //update face in slot
-                        else 
-                            miss_cnt[i] += 1;                                                       //record failure
-                        indices.erase(match);                                                   //remove index so face wont match again
-                    }
-                    else //esle if tracking failed
-                        miss_cnt[i] += 1;                       //record failure
-                    
-                    //if any slot fails several times in a row, reset it
-                    if (miss_cnt[i]>MAX_DETECTIONS_MISSED)
-                    {
-                        miss_cnt[i] = 0;
-                        (*(pnt->trfaces))[i] = Rect2d();
-                    }
-                }
+                Rect_<float> r = (*(pnt->faces))[i];
+                if ((*(pnt->probs))[i] > 0)
+                    tmp_det.push_back(r);
             }
             
-            // 3) For empty slots - match remaining faces in order of occurence, erase their indices
-            for (i=0; i<MAX_TRACKED_FACES; i++)
+            //if first detections ever: init tracker if possible
+            if (pnt->faces->size()>0 && first_detections)
             {
-                Rect2d current = (*(pnt->trfaces))[i];
-                if (current.area()<=0) //if empty slot
-                {
-                    if (indices.empty())
-                        break;
-                    (*(pnt->trfaces))[i] = (*(pnt->faces))[*indices.begin()];
-                    indices.erase(indices.begin());
-                }
+                tracker.init(tmp_det);
+                first_detections = false;
+            }
+            
+            //if tracker initialized, track faces
+            if (!first_detections)
+            {
+                pnt->trfaces->clear();
+                tracker.step(tmp_det, *(pnt->trfaces));
             }
             
             pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
-            
-            indices.clear(); 
-            
+
             nframes++;
         }
         //usleep(1000);
@@ -285,8 +257,7 @@ int main()
     vector<Rect> face_vector;
     vector<float> prob_vector;
     //SHARED tracked_faces vector
-    vector<Rect2d> tracked_faces(MAX_TRACKED_FACES);
-    cout <<"Set up to track "<<tracked_faces.size()<<" faces\n";
+    vector<TrackingBox> tracked_faces;
     
     //setup camera
     raspicam::RaspiCam Camera;
@@ -342,10 +313,12 @@ int main()
             //cleanup
             pthread_attr_destroy(&threadAttr);
             
-            vector<Scalar> colors;
-            colors.push_back(Scalar(1.0,0,0));
-            colors.push_back(Scalar(0,1.0,0));
-            colors.push_back(Scalar(0,0,1.0));
+            //colors for faces ids
+            RNG rng(0xFFFFFFFF);
+            Scalar_<int> colors[TRACKING_NUM_COLORS];
+            for (int i = 0; i < TRACKING_NUM_COLORS; i++)
+                rng.fill(colors[i], RNG::UNIFORM, 0, 256);
+            
             //rendering cycle
             for(;;)
             {
@@ -359,9 +332,11 @@ int main()
                 //for (int i=0; i<face_vector.size(); i++)
                 for (int i=0; i<tracked_faces.size(); i++)
                 {
-                    rectangle(display_frame, tracked_faces[i], colors[i]);
-                    //if (prob_vector[i]>0) 
-                        //rectangle(display_frame, face_vector[i], Scalar(0,0,1.0));
+                    double alpha = ((float)TRACKING_MAX_AGE - tracked_faces[i].age)/TRACKING_MAX_AGE;
+                    Scalar_<int> intcol = colors[tracked_faces[i].id % TRACKING_NUM_COLORS];
+                    Scalar col = Scalar(intcol[0],intcol[1],intcol[2]);
+                    col = alpha*col + (1-alpha)*Scalar(0,0,0);
+                    rectangle(display_frame, tracked_faces[i].box, col, 3); 
                 }
                 pthread_mutex_unlock(&face_vector_mutex);
                 
