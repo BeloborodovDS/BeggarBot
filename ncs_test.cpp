@@ -7,25 +7,24 @@
 #include <iostream>
 #include <fstream>
 #include <set>
-
-#include <pthread.h>
+#include <cstring>
 #include <unistd.h>
 
-#include <mvnc.h>
-#include "ncs_wrapper/ncs_wrapper.hpp"
+#include <pthread.h>
+
+#include <inference_engine.hpp>
+#include "ncs_wrapper/vino_wrapper.hpp"
 
 #include "submodules/sort-cpp/sort-c++/SORTtracker.h"
 
 using namespace cv;
 using namespace std;
+using namespace InferenceEngine;
 
-#define BB_VIDEO_WIDTH                   300
-#define BB_VIDEO_HEIGHT                 300
 #define BB_RAW_WIDTH                     1280
 #define BB_RAW_HEIGHT                    960
-#define NETWORK_OUTPUT_SIZE     707
+#define BB_FACE_MODEL                   "./data/face_vino"
 
-//#define TRACKING_MAX_TRACKED_FACES           3
 #define TRACKING_MAX_AGE          8
 #define TRACKING_MIN_HITS          5
 #define TRACKING_MIN_IOU            0.05
@@ -47,7 +46,7 @@ pthread_mutex_t face_vector_mutex;    //mutex for shared face vectors (probs and
 struct thread_pointers_t
 {
     raspicam::RaspiCam *camera;
-    float **buffers;
+    unsigned char **buffers;
     int *bufcnt;
     NCSWrapper *ncs;
     vector<Rect> *faces;
@@ -71,29 +70,33 @@ float rect_dist(Rect rect1, Rect rect2)
     return sqrt((p1.x-p2.x)*(p1.x-p2.x)+(p1.y-p2.y)*(p1.y-p2.y));
 }
 
-/*Calculate detected bboxes and corresponding probabilities from NCS output 
- * predictions: raw output from NCS (pointer)
- * w,h: display image width and height
- * thresh: include bbox if only its probability is >= thresh
- * probs: empty vector for returned probabilities
- * boxes: empty vector for returned bboxes
+/* function to parse SSD fetector output
+ * @param predictions: output buffer of SSD net 
+ * @param numPred: maximum number of SSD predictions (from net config)
+ * @param w,h: target image height and width
+ * @param thresh: detection threshold
+ * @param probs, boxes: resulting confidences and bounding boxes
  */
-void get_detection_boxes(float* predictions, int w, int h, float thresh, 
+void get_detection_boxes(const float* predictions, int numPred, int w, int h, float thresh, 
                                                 std::vector<float>& probs, std::vector<cv::Rect>& boxes)
 {
-    int num = predictions[0];
     float score = 0;
     float cls = 0;
-    for (int i=1; i<num+1; i++)
+    float id = 0;
+    
+    //predictions holds numPred*7 values
+    //data format: image_id, detection_class, detection_confidence, box_normed_x, box_normed_y, box_normed_w, box_normed_h
+    for (int i=0; i<numPred; i++)
     {
       score = predictions[i*7+2];
       cls = predictions[i*7+1];
-      if (score>thresh && cls<=1)
+      id = predictions[i*7  ];
+      if (id>=0 && score>thresh && cls<=1)
       {
-            probs.push_back(score);
-            boxes.push_back(Rect(predictions[i*7+3]*w, predictions[i*7+4]*h,
-                        (predictions[i*7+5]-predictions[i*7+3])*w, 
-                        (predictions[i*7+6]-predictions[i*7+4])*h));
+        probs.push_back(score);
+        boxes.push_back(Rect(predictions[i*7+3]*w, predictions[i*7+4]*h,
+                    (predictions[i*7+5]-predictions[i*7+3])*w, 
+                    (predictions[i*7+6]-predictions[i*7+4])*h));
       }
     }
 }
@@ -105,12 +108,11 @@ void* get_frames(void* pointers)
     //fps evaluation
     int nframes=0;
     int64 start = getTickCount();
-    
     thread_pointers_t* pnt = (thread_pointers_t*) pointers;
+    int H = pnt->ncs->netInputHeight, W = pnt->ncs->netInputWidth;  //net input image size
+    
     unsigned char* frame_data = NULL; //raw frame
-    Mat resized_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_8UC3); //resized frame
-    resized_frame = Scalar(0);
-    float *swap = NULL;
+    unsigned char *swap = NULL;  //for swapping buffers
     
     while(is_running)
     {
@@ -119,15 +121,13 @@ void* get_frames(void* pointers)
             //get raw frame and create Mat for it
             pnt->camera->grab();           
             frame_data = pnt->camera->getImageBufferData();
-            
             Mat frame(BB_RAW_HEIGHT, BB_RAW_WIDTH, CV_8UC3, frame_data);
-            //Create Mats for existing shared image buffers (for convenience)
-            Mat float_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_32FC3, pnt->buffers[0]);
             
-            //resize frame
-            resize(frame, resized_frame, Size(BB_VIDEO_WIDTH,BB_VIDEO_HEIGHT), 0, 0, INTER_NEAREST);
-            //cast resized frame to [-1.0, 1.0] with shared buffer destination
-            resized_frame.convertTo(float_frame, CV_32F, 1/127.5, -1);
+            //Create Mats for existing shared image buffers (for convenience)
+            Mat resized_frame(H, W, CV_8UC3, pnt->buffers[0]);
+            
+            //resize frame into shared buffer
+            resize(frame, resized_frame, Size(W,H), 0, 0, INTER_NEAREST);
             
             //swap buffers
             //pthread_mutex_lock(&image_buffer_mutex);
@@ -139,7 +139,7 @@ void* get_frames(void* pointers)
             
             nframes++;
         }
-        usleep(1000);
+        //usleep(1000);  //we dont need it since grab() blocks and waits
     }
     //report fps and exit
     double time = (getTickCount()-start)/getTickFrequency();
@@ -156,13 +156,13 @@ void* detect_faces(void* pointers)
     int64 start = getTickCount();
     
     thread_pointers_t* pnt = (thread_pointers_t*) pointers;
+    int H = pnt->ncs->netInputHeight, W = pnt->ncs->netInputWidth;  //net input image size
     float* ncs_output = NULL; //ncs output buffer is provided by wrapper
     bool success = false;
     
     SORTtracker tracker(TRACKING_MAX_AGE, TRACKING_MIN_HITS, TRACKING_MIN_IOU);
-    //flag used to init tracker
-    bool first_detections = true;
-    vector<Rect_<float> > tmp_det;
+    bool first_detections = true;  //flag used to init tracker
+    vector<Rect_<float> > tmp_det;  //convenience vector for type conversion
     
     while(is_running)
     {
@@ -170,7 +170,8 @@ void* detect_faces(void* pointers)
         {            
             //load image into NCS
             //pthread_mutex_lock(&image_buffer_mutex);
-            success = pnt->ncs->load_tensor_nowait(pnt->buffers[1]);
+            Mat data_mat(H, W, CV_8UC3, pnt->buffers[1]);
+            success = pnt->ncs->load_tensor_nowait(data_mat);
             *(pnt->bufcnt)-=1;
             //pthread_mutex_unlock(&image_buffer_mutex);
             if(!success)
@@ -193,7 +194,8 @@ void* detect_faces(void* pointers)
             pnt->faces->clear();
             pnt->probs->clear();
             tmp_det.clear();
-            get_detection_boxes(ncs_output, BB_VIDEO_WIDTH, BB_VIDEO_HEIGHT, 0.2, *(pnt->probs), *(pnt->faces));
+            get_detection_boxes(ncs_output, pnt->ncs->maxNumDetectedFaces, 
+                                                    W, H, 0.2, *(pnt->probs), *(pnt->faces));
             
             //copy to tmp_det to transform type
             for (int i=0; i<pnt->faces->size(); i++)
@@ -221,7 +223,7 @@ void* detect_faces(void* pointers)
 
             nframes++;
         }
-        //usleep(1000);
+        //usleep(1000);  //we dont need it since get_result() blocks and waits
     }
     //report fps and exit
     double time = (getTickCount()-start)/getTickFrequency();
@@ -233,32 +235,21 @@ int main()
 {
     is_running = true; //will be used to terminate threads
     
-    //init all mutex
-    pthread_mutex_init(&image_buffer_mutex, NULL);
-    pthread_mutex_init(&face_vector_mutex, NULL);
-    
-    //allocate and reset SHARED image buffers
-    //use buffer 0 to write transformed data
-    //use buffer 1 to read data
-    float* image_buffers[2]; 
-    int buffer_count = 0;
-    for (int k=0; k<2; k++)
+    //----------------------------------NCS-WRAPPER----------------------
+    //NCS interface
+    NCSWrapper NCS(true);
+    //Start communication with NCS
+    if (!NCS.load_file(BB_FACE_MODEL))
     {
-        image_buffers[k] = new float [BB_VIDEO_WIDTH*BB_VIDEO_HEIGHT*3];
-        for (int i=0; i<BB_VIDEO_WIDTH*BB_VIDEO_HEIGHT*3; i++)
-            image_buffers[k][i] = 0;
+        cout<<"Cannot load graph file"<<endl;
+        return 0;
     }
     
-    //Convenience Mats
-    Mat display_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_32FC3);
-    Mat float_frame(BB_VIDEO_HEIGHT, BB_VIDEO_WIDTH, CV_32FC3, image_buffers[1]); // SHARED
+    //get image size from neural network
+    int H=NCS.netInputHeight, W=NCS.netInputWidth;
+    int HW3 =H*W*3;
     
-    //SHARED face and prob vectors
-    vector<Rect> face_vector;
-    vector<float> prob_vector;
-    //SHARED tracked_faces vector
-    vector<TrackingBox> tracked_faces;
-    
+    //-----------------------------------CAMERA---------------------------------------
     //setup camera
     raspicam::RaspiCam Camera;
     Camera.setContrast(100);//50
@@ -271,96 +262,110 @@ int main()
     if(!Camera.open())
     {
         cout<<"Failed to open camera\n";
+        return 0;
     }
-    else
+    cout<<"Connected to camera "<<Camera.getId()<<endl;
+
+    //-----------------------------------------------------------BUFFERS--------------------------------------
+    //allocate and reset SHARED image buffers
+    //use buffer 0 to write transformed data
+    //use buffer 1 to read data
+    unsigned char* image_buffers[2]; 
+    int buffer_count = 0;
+    for (int k=0; k<2; k++)
     {
-        cout<<"Connected to camera "<<Camera.getId()<<endl;
-        
-        //NCS interface
-        NCSWrapper NCS(BB_VIDEO_WIDTH*BB_VIDEO_HEIGHT*3, NETWORK_OUTPUT_SIZE);
-        //Start communication with NCS
-        if (!NCS.load_file("./data/ssd-face.graph"))
-        {
-            cout<<"Cannot load graph file"<<endl;
-        }
-        else
-        {
-            //setup structure to pass to threads
-            thread_pointers_t thread_pointers;
-            thread_pointers.buffers = image_buffers;
-            thread_pointers.bufcnt = &buffer_count;
-            thread_pointers.camera = &Camera;
-            thread_pointers.ncs = &NCS;
-            thread_pointers.faces = &face_vector;
-            thread_pointers.probs = &prob_vector;
-            thread_pointers.trfaces = &tracked_faces;
-            
-            //set threads to be JOINABLE
-            pthread_attr_t threadAttr;
-            pthread_attr_init(&threadAttr);
-            pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_JOINABLE);
-            
-            //launch threads
-            pthread_t thread_get_frames, thread_detect_faces;
-            int err = 0;
-            err = pthread_create(&thread_get_frames, &threadAttr, get_frames, (void*)&thread_pointers);
-            if (err)
-                cout<<"Failed to create get_frames process with code "<<err<<endl;
-            err = pthread_create(&thread_detect_faces, &threadAttr, detect_faces, (void*)&thread_pointers);
-            if (err)
-                cout<<"Failed to create detect_faces process with code "<<err<<endl;
-            
-            //cleanup
-            pthread_attr_destroy(&threadAttr);
-            
-            //colors for faces ids
-            RNG rng(0xFFFFFFFF);
-            Scalar_<int> colors[TRACKING_NUM_COLORS];
-            for (int i = 0; i < TRACKING_NUM_COLORS; i++)
-                rng.fill(colors[i], RNG::UNIFORM, 0, 256);
-            
-            //rendering cycle
-            for(;;)
-            {
-                //get shared image and convert it
-                //pthread_mutex_lock(&image_buffer_mutex);
-                float_frame.convertTo(display_frame, CV_32F, 0.5, 0.5);
-                //pthread_mutex_unlock(&image_buffer_mutex);
-                
-                //draw faces from shared vectors
-                pthread_mutex_lock(&face_vector_mutex);
-                //for (int i=0; i<face_vector.size(); i++)
-                for (int i=0; i<tracked_faces.size(); i++)
-                {
-                    double alpha = ((float)TRACKING_MAX_AGE - tracked_faces[i].age)/TRACKING_MAX_AGE;
-                    Scalar_<int> intcol = colors[tracked_faces[i].id % TRACKING_NUM_COLORS];
-                    Scalar col = Scalar(intcol[0],intcol[1],intcol[2]);
-                    col = alpha*col + (1-alpha)*Scalar(0,0,0);
-                    rectangle(display_frame, tracked_faces[i].box, col, 3); 
-                }
-                pthread_mutex_unlock(&face_vector_mutex);
-                
-                //display and wait for key
-                imshow("frame", display_frame);
-                usleep(40000);
-                if(waitKey(1)!=-1)
-                {
-                    break;
-                }
-            }
-            is_running = false;
-            
-            //join threads
-            err = pthread_join(thread_get_frames, NULL);
-            if (err)
-                cout<<"Failed to join get_frames process with code "<<err<<endl;
-            err = pthread_join(thread_detect_faces, NULL);
-            if (err)
-                cout<<"Failed to join detect_frames process with code "<<err<<endl;
-        }
-        
-        Camera.release();
+        image_buffers[k] = new unsigned char [HW3];
+        for (int i=0; i<HW3; i++)  image_buffers[k][i] = 0;
     }
+    
+    //Convenience Mat
+    Mat display_frame(H, W, CV_8UC3); // SHARED
+    
+    //SHARED face and prob vectors
+    vector<Rect> face_vector;
+    vector<float> prob_vector;
+    //SHARED tracked_faces vector
+    vector<TrackingBox> tracked_faces;
+    
+    //----------------------------------------------THREADS-------------------------------------
+    //init all mutex
+    pthread_mutex_init(&image_buffer_mutex, NULL);
+    pthread_mutex_init(&face_vector_mutex, NULL);
+    
+    //setup structure to pass to threads
+    thread_pointers_t thread_pointers;
+    thread_pointers.buffers = image_buffers;
+    thread_pointers.bufcnt = &buffer_count;
+    thread_pointers.camera = &Camera;
+    thread_pointers.ncs = &NCS;
+    thread_pointers.faces = &face_vector;
+    thread_pointers.probs = &prob_vector;
+    thread_pointers.trfaces = &tracked_faces;
+    
+    //set threads to be JOINABLE
+    pthread_attr_t threadAttr;
+    pthread_attr_init(&threadAttr);
+    pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_JOINABLE);
+    
+    //------------------------------------------------MAIN---------------------------------
+    //launch threads
+    pthread_t thread_get_frames, thread_detect_faces;
+    int err = 0;
+    err = pthread_create(&thread_get_frames, &threadAttr, get_frames, (void*)&thread_pointers);
+    if (err)
+        cout<<"Failed to create get_frames process with code "<<err<<endl;
+    err = pthread_create(&thread_detect_faces, &threadAttr, detect_faces, (void*)&thread_pointers);
+    if (err)
+        cout<<"Failed to create detect_faces process with code "<<err<<endl;
+    
+    //cleanup
+    pthread_attr_destroy(&threadAttr);
+    
+    //colors for faces ids
+    RNG rng(0xFFFFFFFF);
+    Scalar_<int> colors[TRACKING_NUM_COLORS];
+    for (int i = 0; i < TRACKING_NUM_COLORS; i++)
+        rng.fill(colors[i], RNG::UNIFORM, 0, 256);
+    
+    //rendering cycle
+    for(;;)
+    {
+        memcpy(display_frame.data, image_buffers[1], HW3*sizeof(unsigned char));
+        
+        //draw faces from shared vectors
+        pthread_mutex_lock(&face_vector_mutex);
+        
+        for (int i=0; i<tracked_faces.size(); i++)
+        {
+            double alpha = ((float)TRACKING_MAX_AGE - tracked_faces[i].age)/TRACKING_MAX_AGE;
+            Scalar_<int> intcol = colors[tracked_faces[i].id % TRACKING_NUM_COLORS];
+            Scalar col = Scalar(intcol[0],intcol[1],intcol[2]);
+            col = alpha*col + (1-alpha)*Scalar(0,0,0);
+            rectangle(display_frame, tracked_faces[i].box, col, 3); 
+        }
+        pthread_mutex_unlock(&face_vector_mutex);
+        
+        //display and wait for key
+        imshow("frame", display_frame);
+        usleep(40000);
+        if(waitKey(1)!=-1)
+        {
+            break;
+        }
+    }
+    is_running = false;
+    
+    //join threads
+    err = pthread_join(thread_get_frames, NULL);
+    if (err)
+        cout<<"Failed to join get_frames process with code "<<err<<endl;
+    err = pthread_join(thread_detect_faces, NULL);
+    if (err)
+        cout<<"Failed to join detect_frames process with code "<<err<<endl;
+    
+    //----------------------------CLEANUP------------------------------------------
+    
+    Camera.release();
     
     //cleanup
     delete [] image_buffers[0];
