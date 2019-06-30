@@ -1,28 +1,40 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/video/video.hpp>
-#include <opencv2/objdetect/objdetect.hpp>
 
 #include <raspicam/raspicam.h>
 
 #include <iostream>
+#include <fstream>
+#include <set>
+#include <cstring>
+#include <unistd.h>
+
+#include <pthread.h>
 
 #include "pca9685.h"
 #include <wiringPi.h>
 #include "submodules/mcp3008/mcp3008Spi.h"
 
-#include <pthread.h>
+#include <inference_engine.hpp>
+#include "ncs_wrapper/vino_wrapper.hpp"
+#include "submodules/sort-cpp/sort-c++/SORTtracker.h"
+
 
 using namespace cv;
 using namespace std;
+using namespace InferenceEngine;
 
-#define BB_VIDEO_WIDTH 		               360
-#define BB_VIDEO_HEIGHT 	               240
-#define BB_MIN_FACE		                       15
-#define BB_MAX_FACE		                   150
-
+//Face detection
 #define BB_RAW_WIDTH                        1280
 #define BB_RAW_HEIGHT                       960
+#define BB_FACE_MODEL                       "./data/face_vino"
+
+//Tracking
+#define TRACKING_MAX_AGE          8
+#define TRACKING_MIN_HITS          5
+#define TRACKING_MIN_IOU            0.05
+#define TRACKING_NUM_COLORS  20
 
 //pca9685 defines
 #define BB_PCA_PIN_BASE 	300
@@ -56,14 +68,30 @@ using namespace std;
 #define BB_IR_LEFT		0	//Infrared sensors
 #define BB_IR_RIGHT		1
 
-//struct to pass pointers to face detection thread
-struct facePointersType
-{
-  raspicam::RaspiCam *camera;
-  CascadeClassifier     *detector;
-};
+volatile bool is_running;  //is used to stop threads from main()
+pthread_mutex_t image_buffer_mutex; //mutex for shared image buffer
+pthread_mutex_t face_vector_mutex;    //mutex for shared face vectors (probs and faces)
 
-float g_headPos;
+float g_headPos; //head position
+
+/* Struct to pass to threads
+ * camera: pointer to RaspiCam camera
+ * buffers: pointer to shared image buffers
+ * bufcnt: counter of filled buffers
+ * ncs: pointer to NCSWrapper instance
+ * faces, probs: pointers to shared face and prob vectors
+ * trfaces, trprobs: pointers to tracked faces and auxilary values
+ */
+struct thread_pointers_t
+{
+    raspicam::RaspiCam *camera;
+    unsigned char **buffers;
+    int *bufcnt;
+    NCSWrapper *ncs;
+    vector<Rect> *faces;
+    vector<float> *probs;
+    vector<TrackingBox> *trfaces;
+};
 
 //drive servo PIN at angle ANGLE for SG90 servo
 //angle: [0,180], pin: PIN_BASE(controller)+SERVO_NUM(0-15) or PIN_BASE(controller)+16 for all servos
@@ -186,81 +214,183 @@ unsigned int analogRead(mcp3008Spi &adc, unsigned char channel)
   return val;
 }
 
-void *detectFace(void* pointers)
+//calc IOU between two rects
+float rect_iou(Rect rect1, Rect rect2)
 {
-  facePointersType* pnts = (facePointersType*)pointers;
-  vector<Rect> detections;
-  unsigned char* image_data = NULL;
-  cv::Point face_coord = cv::Point(BB_VIDEO_WIDTH/2, BB_VIDEO_HEIGHT/2); //initial previous face is in the center
-  bool tracking = false;
-  int n_det = 0, n_nodet = 0; //number of detection/no-detections in a row
-  
-  for (int i=0; i<60; i++) 
-  { 	  
-    //get frame
-    pnts->camera->grab();
-    image_data = pnts->camera->getImageBufferData();
-    Mat image(BB_RAW_HEIGHT, BB_RAW_WIDTH, CV_8UC3, image_data);
-    cvtColor(image, image, CV_RGB2GRAY);
-    
-    //transform image and detect face
-    detections.clear();
-    resize(image,image,Size(BB_VIDEO_WIDTH,BB_VIDEO_HEIGHT));
-    pnts->detector->detectMultiScale(image, detections, 1.1, 3, 0, Size(BB_MIN_FACE,BB_MIN_FACE), Size(BB_MAX_FACE,BB_MAX_FACE));
-    
-    //if have detections
-    if (detections.size() > 0)
-    {
-      float best_dist = 1000000;
-      float dist = 0;
-      cv::Point best_coord = cv::Point();
-      //find closest detection to previous detection:
-      for (int i=0; i<detections.size(); i++)
-      {
-        cv::Point center = 0.5*(detections[i].tl() + detections[i].br()); 
-        dist = (face_coord.x-center.x)*(face_coord.x-center.x) + (face_coord.y-center.y)*(face_coord.y-center.y);
-        if (dist<best_dist)
-        {
-            best_dist = dist;
-            best_coord = center;
-        }
-      }
-      
-      face_coord = best_coord; //set new previous detection
-      n_det++; //one more frame with detections
-      n_nodet=0; //no-detection sequence interrupted
-    }
-    else
-    {
-      n_nodet++; //one more frame without detections
-      n_det=0; //detection sequence interrupted
-    }
-    
-    if (!tracking) //not tracking face now
-    {
-      if(n_det>3) //long detection sequence => start tracking
-      {
-        n_nodet = 0;
-        tracking = true;
-      }
-    }
-    else
-    {
-      if(n_nodet>20) //long no-detection sequence => drop tracking
-      {
-        n_det = 0;
-        tracking = false;
-      }
-    }
-      
-    if (tracking)
-      cout<<i<<" "<<face_coord.x<<"  "<<face_coord.y<<endl;
-    else
-      cout<<i<<" -"<<endl;
-  }
-  
-  pthread_exit(NULL);
+    float inter = (rect1 & rect2).area();
+    if (inter <= 0) return 0;
+    return inter/(rect1.area() + rect2.area() - inter);
 }
+
+//calc distance between two rects
+float rect_dist(Rect rect1, Rect rect2)
+{
+    Point p1 = 0.5*(rect1.tl()+rect1.br());
+    Point p2 = 0.5*(rect2.tl()+rect2.br());
+    return sqrt((p1.x-p2.x)*(p1.x-p2.x)+(p1.y-p2.y)*(p1.y-p2.y));
+}
+
+/* function to parse SSD fetector output
+ * @param predictions: output buffer of SSD net 
+ * @param numPred: maximum number of SSD predictions (from net config)
+ * @param w,h: target image height and width
+ * @param thresh: detection threshold
+ * @param probs, boxes: resulting confidences and bounding boxes
+ */
+void get_detection_boxes(const float* predictions, int numPred, int w, int h, float thresh, 
+                                                std::vector<float>& probs, std::vector<cv::Rect>& boxes)
+{
+    float score = 0;
+    float cls = 0;
+    float id = 0;
+    
+    //predictions holds numPred*7 values
+    //data format: image_id, detection_class, detection_confidence, box_normed_x, box_normed_y, box_normed_w, box_normed_h
+    for (int i=0; i<numPred; i++)
+    {
+      score = predictions[i*7+2];
+      cls = predictions[i*7+1];
+      id = predictions[i*7  ];
+      if (id>=0 && score>thresh && cls<=1)
+      {
+        probs.push_back(score);
+        boxes.push_back(Rect(predictions[i*7+3]*w, predictions[i*7+4]*h,
+                    (predictions[i*7+5]-predictions[i*7+3])*w, 
+                    (predictions[i*7+6]-predictions[i*7+4])*h));
+      }
+    }
+}
+
+/* Threaded frame read and processing for NCS input
+ */
+void* get_frames(void* pointers)
+{
+    //fps evaluation
+    int nframes=0;
+    int64 start = getTickCount();
+    thread_pointers_t* pnt = (thread_pointers_t*) pointers;
+    int H = pnt->ncs->netInputHeight, W = pnt->ncs->netInputWidth;  //net input image size
+    
+    unsigned char* frame_data = NULL; //raw frame
+    unsigned char *swap = NULL;  //for swapping buffers
+    
+    while(is_running)
+    {
+        if (*(pnt->bufcnt)<1)
+        {
+            //get raw frame and create Mat for it
+            pnt->camera->grab();           
+            frame_data = pnt->camera->getImageBufferData();
+            Mat frame(BB_RAW_HEIGHT, BB_RAW_WIDTH, CV_8UC3, frame_data);
+            
+            //Create Mats for existing shared image buffers (for convenience)
+            Mat resized_frame(H, W, CV_8UC3, pnt->buffers[0]);
+            
+            //resize frame into shared buffer
+            resize(frame, resized_frame, Size(W,H), 0, 0, INTER_NEAREST);
+            
+            //swap buffers
+            //pthread_mutex_lock(&image_buffer_mutex);
+            swap = pnt->buffers[0];
+            pnt->buffers[0] = pnt->buffers[1];
+            pnt->buffers[1] = swap;
+            *(pnt->bufcnt)+=1;
+            //pthread_mutex_unlock(&image_buffer_mutex);
+            
+            nframes++;
+        }
+        //usleep(1000);  //we dont need it since grab() blocks and waits
+    }
+    //report fps and exit
+    double time = (getTickCount()-start)/getTickFrequency();
+    cout<<"Frame processing FPS: "<<nframes/time<<endl;
+    pthread_exit((void*) 0);
+}
+
+/* Threaded face detection on NCS
+ */
+void* detect_faces(void* pointers)
+{
+    //fps evaluation
+    int nframes=0;
+    int64 start = getTickCount();
+    
+    thread_pointers_t* pnt = (thread_pointers_t*) pointers;
+    int H = pnt->ncs->netInputHeight, W = pnt->ncs->netInputWidth;  //net input image size
+    float* ncs_output = NULL; //ncs output buffer is provided by wrapper
+    bool success = false;
+    
+    SORTtracker tracker(TRACKING_MAX_AGE, TRACKING_MIN_HITS, TRACKING_MIN_IOU);
+    bool first_detections = true;  //flag used to init tracker
+    vector<Rect_<float> > tmp_det;  //convenience vector for type conversion
+    
+    while(is_running)
+    {
+        if (*(pnt->bufcnt)>=1)
+        {            
+            //load image into NCS
+            //pthread_mutex_lock(&image_buffer_mutex);
+            Mat data_mat(H, W, CV_8UC3, pnt->buffers[1]);
+            success = pnt->ncs->load_tensor_nowait(data_mat);
+            *(pnt->bufcnt)-=1;
+            //pthread_mutex_unlock(&image_buffer_mutex);
+            if(!success)
+            {
+                pnt->ncs->print_error_code();
+                break;
+            }
+            
+            //now LOCK until result arrives
+            if(!pnt->ncs->get_result(ncs_output))
+            {
+                pnt->ncs->print_error_code();
+                break;
+            }
+            
+            //get result into shared vactors
+            pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
+            
+            //get detections from NCS
+            pnt->faces->clear();
+            pnt->probs->clear();
+            tmp_det.clear();
+            get_detection_boxes(ncs_output, pnt->ncs->maxNumDetectedFaces, 
+                                                    W, H, 0.2, *(pnt->probs), *(pnt->faces));
+            
+            //copy to tmp_det to transform type
+            for (int i=0; i<pnt->faces->size(); i++)
+            {
+                Rect_<float> r = (*(pnt->faces))[i];
+                if ((*(pnt->probs))[i] > 0)
+                    tmp_det.push_back(r);
+            }
+            
+            //if first detections ever: init tracker if possible
+            if (pnt->faces->size()>0 && first_detections)
+            {
+                tracker.init(tmp_det);
+                first_detections = false;
+            }
+            
+            //if tracker initialized, track faces
+            if (!first_detections)
+            {
+                pnt->trfaces->clear();
+                tracker.step(tmp_det, *(pnt->trfaces));
+            }
+            
+            pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
+
+            nframes++;
+        }
+        //usleep(1000);  //we dont need it since get_result() blocks and waits
+    }
+    //report fps and exit
+    double time = (getTickCount()-start)/getTickFrequency();
+    cout<<"Face detection FPS: "<<nframes/time<<endl;
+    pthread_exit((void*) 0);
+}
+
 
 void* simpleHeadMove(void* nothing)
 {
@@ -284,9 +414,22 @@ void resetRobot()
 
 int main( int argc, char** argv )
 {    
-    
     //------------------------------------------------INIT-----------------------------------------------------------------
-  
+    is_running = true; //will be used to terminate threads
+    
+    //NCS interface
+    NCSWrapper NCS(true);
+    //Start communication with NCS
+    if (!NCS.load_file(BB_FACE_MODEL))
+    {
+        cout<<"Cannot load graph file"<<endl;
+        return 0;
+    }
+    
+    //get image size from neural network
+    int H=NCS.netInputHeight, W=NCS.netInputWidth;
+    int HW3 =H*W*3;  
+    
     //Init camera
     //setup camera
     raspicam::RaspiCam Camera;
@@ -304,19 +447,44 @@ int main( int argc, char** argv )
     }
     cout<<"Connected to camera ="<<Camera.getId() <<endl;
     
-    //Init face detector
-    CascadeClassifier detector;
-    if(!detector.load("./lbpcascade_frontalface.xml"))
+    //allocate and reset SHARED image buffers
+    //use buffer 0 to write transformed data
+    //use buffer 1 to read data
+    unsigned char* image_buffers[2]; 
+    int buffer_count = 0;
+    for (int k=0; k<2; k++)
     {
-        cout<<"Cannot load detector"<<endl;
-        return 0;
+        image_buffers[k] = new unsigned char [HW3];
+        for (int i=0; i<HW3; i++)  image_buffers[k][i] = 0;
     }
-    cout<<"Face detector loaded"<<endl;
     
-    //pointers to pass to face detection thread
-    facePointersType facePointers;
-    facePointers.camera = &Camera;
-    facePointers.detector = &detector;
+    //Convenience Mat
+    Mat display_frame(H, W, CV_8UC3); // SHARED
+    
+    //SHARED face and prob vectors
+    vector<Rect> face_vector;
+    vector<float> prob_vector;
+    //SHARED tracked_faces vector
+    vector<TrackingBox> tracked_faces;
+
+    //init all mutex
+    pthread_mutex_init(&image_buffer_mutex, NULL);
+    pthread_mutex_init(&face_vector_mutex, NULL);
+    
+    //setup structure to pass to threads
+    thread_pointers_t thread_pointers;
+    thread_pointers.buffers = image_buffers;
+    thread_pointers.bufcnt = &buffer_count;
+    thread_pointers.camera = &Camera;
+    thread_pointers.ncs = &NCS;
+    thread_pointers.faces = &face_vector;
+    thread_pointers.probs = &prob_vector;
+    thread_pointers.trfaces = &tracked_faces;
+    
+    //set threads to be JOINABLE
+    pthread_attr_t threadAttr;
+    pthread_attr_init(&threadAttr);
+    pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_JOINABLE);
   
     //setup WiringPi
     wiringPiSetup();
@@ -341,116 +509,64 @@ int main( int argc, char** argv )
     cout<<"Robot reset"<<endl;
     
     g_headPos = BB_HEAD_INIT_POS;
+    
     //-------------------------------------------------MAIN BODY-----------------------------------------------------------
     
-    /*
-    //fill attributes to create joinable threads
-    pthread_attr_t threadAttr;
-    pthread_attr_init(&threadAttr);
-    pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_JOINABLE);
-    
-    //creadte threads
-    pthread_t threadFaceDetection, threadHeadRotation;
+    //launch threads
+    pthread_t thread_get_frames, thread_detect_faces;
     int err = 0;
-    err = pthread_create(&threadFaceDetection, &threadAttr, detectFace, (void*)&facePointers);
+    err = pthread_create(&thread_get_frames, &threadAttr, get_frames, (void*)&thread_pointers);
     if (err)
-      cout<<"Fail to create face detection process with code "<<err<<endl;
-    err = pthread_create(&threadHeadRotation, &threadAttr, simpleHeadMove, NULL);
+        cout<<"Failed to create get_frames process with code "<<err<<endl;
+    err = pthread_create(&thread_detect_faces, &threadAttr, detect_faces, (void*)&thread_pointers);
     if (err)
-      cout<<"Fail to create head rotation process with code "<<err<<endl;
+        cout<<"Failed to create detect_faces process with code "<<err<<endl;
     
+    //cleanup
     pthread_attr_destroy(&threadAttr);
     
-    //join threads
-    err = pthread_join(threadFaceDetection, NULL);
-    if (err)
-      cout<<"Fail to join face detection process with code "<<err<<endl;
-    err = pthread_join(threadHeadRotation, NULL);
-    if (err)
-      cout<<"Fail to join head rotation process with code "<<err<<endl;
-    */
+    //colors for faces ids
+    RNG rng(0xFFFFFFFF);
+    Scalar_<int> colors[TRACKING_NUM_COLORS];
+    for (int i = 0; i < TRACKING_NUM_COLORS; i++)
+        rng.fill(colors[i], RNG::UNIFORM, 0, 256);
     
-    vector<Rect> detections;
-    unsigned char* image_data = NULL; 
-    cv::Point face_coord = cv::Point(BB_VIDEO_WIDTH/2, BB_VIDEO_HEIGHT/2); //initial previous face is in the center
-    bool tracking = false;
-    int n_det = 0, n_nodet = 0; //number of detection/no-detections in a row
-    
-    for (int i=0; i<300; i++) 
-    { 	  
-      //get frame
-      Camera.grab();
-      image_data = Camera.getImageBufferData();
-      Mat image(BB_RAW_HEIGHT, BB_RAW_WIDTH, CV_8UC3, image_data);
-      cvtColor(image, image, CV_RGB2GRAY);
-      
-      //transform image and detect face
-      detections.clear();
-      resize(image,image,Size(BB_VIDEO_WIDTH,BB_VIDEO_HEIGHT));
-      detector.detectMultiScale(image, detections, 1.1, 3, 0, Size(BB_MIN_FACE,BB_MIN_FACE), Size(BB_MAX_FACE,BB_MAX_FACE));
-      
-      //if have detections
-      if (detections.size() > 0)
-      {
-        float best_dist = 1000000;
-        float dist = 0;
-        cv::Point best_coord = cv::Point();
-        //find closest detection to previous detection:
-        for (int i=0; i<detections.size(); i++)
-        {
-        cv::Point center = 0.5*(detections[i].tl() + detections[i].br()); 
-        dist = (face_coord.x-center.x)*(face_coord.x-center.x) + (face_coord.y-center.y)*(face_coord.y-center.y);
-        if (dist<best_dist)
-        {
-            best_dist = dist;
-            best_coord = center;
-        }
-        }
+    //rendering cycle
+    for(;;)
+    {
+        memcpy(display_frame.data, image_buffers[1], HW3*sizeof(unsigned char));
         
-        face_coord = best_coord; //set new previous detection
-        n_det++; //one more frame with detections
-        n_nodet=0; //no-detection sequence interrupted
-      }
-      else
-      {
-        n_nodet++; //one more frame without detections
-        n_det=0; //detection sequence interrupted
-      }
-      
-      if (!tracking) //not tracking face now
-      {
-        if(n_det>3) //long detection sequence => start tracking
+        //draw faces from shared vectors
+        pthread_mutex_lock(&face_vector_mutex);
+        
+        for (int i=0; i<tracked_faces.size(); i++)
         {
-        n_nodet = 0;
-        tracking = true;
+            double alpha = ((float)TRACKING_MAX_AGE - tracked_faces[i].age)/TRACKING_MAX_AGE;
+            Scalar_<int> intcol = colors[tracked_faces[i].id % TRACKING_NUM_COLORS];
+            Scalar col = Scalar(intcol[0],intcol[1],intcol[2]);
+            col = alpha*col + (1-alpha)*Scalar(0,0,0);
+            rectangle(display_frame, tracked_faces[i].box, col, 3); 
         }
-      }
-      else
-      {
-        if(n_nodet>20) //long no-detection sequence => drop tracking
+        pthread_mutex_unlock(&face_vector_mutex);
+        
+        //display and wait for key
+        imshow("frame", display_frame);
+        usleep(40000);
+        if(waitKey(1)!=-1)
         {
-        n_det = 0;
-        tracking = false;
+            break;
         }
-      }
-
-      //draw
-      if (tracking && detections.size()>0)
-        cv::circle(image, face_coord, 7, cv::Scalar(255,255,255), -1);
-      if (tracking && detections.size()==0)
-        cv::circle(image, face_coord, 3, cv::Scalar(255,255,255), -1);
-
-      for (int i=0; i<detections.size(); i++)
-        rectangle(image, detections[i], cv::Scalar(255,0,0));
-      imshow("frame",image);	
-      
-      if(waitKey(1)!=-1)
-      {
-        break;
-      }
     }
+    is_running = false;
     
-    
+    //join threads
+    err = pthread_join(thread_get_frames, NULL);
+    if (err)
+        cout<<"Failed to join get_frames process with code "<<err<<endl;
+    err = pthread_join(thread_detect_faces, NULL);
+    if (err)
+        cout<<"Failed to join detect_frames process with code "<<err<<endl;
+        
     delay(1000);    
     
     frown(1);
@@ -484,8 +600,14 @@ int main( int argc, char** argv )
       cout<<val1<<"  "<<val2<<endl;
       delay(100);
     }
-    //*/
+
     //--------------------------------------------RESET--------------------------------------------------
+    delete [] image_buffers[0];
+    delete [] image_buffers[1];
+    
+    pthread_mutex_destroy(&image_buffer_mutex);
+    pthread_mutex_destroy(&face_vector_mutex);
+    
     resetRobot();
     cout<<"Final reset."<<endl;
     Camera.release();
