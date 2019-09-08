@@ -30,8 +30,12 @@ using namespace InferenceEngine;
 #define BB_RAW_HEIGHT                       960
 #define BB_FACE_MODEL                       "./data/face_vino"
 
+//Camera field of view
+#define BB_HFOV                                 62.2
+#define BB_VFOV                                 48.8
+
 //Tracking
-#define TRACKING_MAX_AGE          8
+#define TRACKING_MAX_AGE          3
 #define TRACKING_MIN_HITS          5
 #define TRACKING_MIN_IOU            0.05
 #define TRACKING_NUM_COLORS  20
@@ -54,7 +58,7 @@ using namespace InferenceEngine;
 #define BB_HEAD_MAX_STEP	BB_HEAD_DT * BB_SERVO_MAX_SPEED
 #define BB_HEAD_INIT_POS	50.0 //initial angle
 #define BB_HEAD_MIN_LIMIT	40.0
-#define BB_HEAD_MAX_LIMIT	135.0
+#define BB_HEAD_MAX_LIMIT	90.0
 
 //PINS
 #define BB_PIN_EYEBROW 		BB_PCA_PIN_BASE  //eyebrow servo at pin location 0 on PCA controller
@@ -87,6 +91,7 @@ struct thread_pointers_t
     raspicam::RaspiCam *camera;
     unsigned char **buffers;
     int *bufcnt;
+    bool *face_processed;
     NCSWrapper *ncs;
     vector<Rect> *faces;
     vector<float> *probs;
@@ -139,13 +144,13 @@ void shake()
 }
 
 
-//Drive head from angle an_from to angle an_to with specified speed
+//Drive head from g_headPos to g_headPos+delta_angle with specified speed
 //speed is ratio from SERVO_MAX_SPEED, in [0,1]
-//!!! valid an_from value must be provided
-void driveHead(float an_from, float an_to, float speed = 0.1)
+void driveHead(float delta_angle, float speed = 0.1)
 {
   if (speed > 1) speed = 1;
   if (speed < 0) speed = 0;
+  float an_from = g_headPos, an_to = g_headPos+delta_angle;
   if (an_to > BB_HEAD_MAX_LIMIT) an_to = BB_HEAD_MAX_LIMIT; //angle is limited in [45, 135] for safety reasons
   if (an_to < BB_HEAD_MIN_LIMIT) an_to = BB_HEAD_MIN_LIMIT;
   if (an_from < 0) an_from = 0;
@@ -170,6 +175,8 @@ void driveHead(float an_from, float an_to, float speed = 0.1)
     
   //fix imprecise position
   driveDegs(an_to, BB_PIN_HEAD);
+  g_headPos = an_to;
+  
   delay(BB_HEAD_DT);
 }
 
@@ -230,7 +237,7 @@ float rect_dist(Rect rect1, Rect rect2)
     return sqrt((p1.x-p2.x)*(p1.x-p2.x)+(p1.y-p2.y)*(p1.y-p2.y));
 }
 
-/* function to parse SSD fetector output
+/* function to parse SSD detector output
  * @param predictions: output buffer of SSD net 
  * @param numPred: maximum number of SSD predictions (from net config)
  * @param w,h: target image height and width
@@ -379,6 +386,9 @@ void* detect_faces(void* pointers)
                 tracker.step(tmp_det, *(pnt->trfaces));
             }
             
+            *(pnt->face_processed) = false;
+            cout << "NEW\n";
+            
             pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
 
             nframes++;
@@ -405,12 +415,56 @@ void* simpleHeadMove(void* nothing)
 void resetRobot()
 {
   driveDegs(BB_HEAD_INIT_POS, BB_PIN_HEAD);
+  g_headPos = BB_HEAD_INIT_POS;
   frown(0);
   driveDegs(90, BB_PIN_ARM);
   delay(2000);
 }
 
-
+bool follow_face(thread_pointers_t* pointers)
+{
+  int H = pointers->ncs->netInputHeight, W = pointers->ncs->netInputWidth;  //net input image size
+  float y = 0, x = 0, dist=0, mindist=100000;
+  TrackingBox trbox, best_trbox;
+  
+  while ( *(pointers->face_processed))
+  {
+      cout << "DELAY\n";
+      delay(10);
+  }
+  
+  pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
+  for (int i=0; i<pointers->trfaces->size(); i++)
+  {
+    trbox = (*(pointers->trfaces))[i];
+    y = trbox.box.y + trbox.box.height/2;
+    x = trbox.box.x + trbox.box.width/2;
+    dist = abs(y - H/2.0) + abs(x - W/2.0);
+    if (dist < mindist)
+    {
+        mindist = dist; 
+        best_trbox = trbox;
+    }
+  }
+  pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
+  
+  y = 0;
+  if (mindist<100000)
+  {
+    y = best_trbox.box.y + best_trbox.box.height/2 - H/2.0;
+    y = y*BB_VFOV/H;
+  }
+  
+  if (abs(y)<3) y = 0;
+  if (abs(y)>0) driveHead(y, 0.1);
+  delay(300);
+  
+  cout << y << endl;
+  
+  *(pointers->face_processed) = true;
+  
+  return true;
+}
 
 int main( int argc, char** argv )
 {    
@@ -472,9 +526,11 @@ int main( int argc, char** argv )
     pthread_mutex_init(&face_vector_mutex, NULL);
     
     //setup structure to pass to threads
+    bool face_processed = true;
     thread_pointers_t thread_pointers;
     thread_pointers.buffers = image_buffers;
     thread_pointers.bufcnt = &buffer_count;
+    thread_pointers.face_processed = &face_processed;
     thread_pointers.camera = &Camera;
     thread_pointers.ncs = &NCS;
     thread_pointers.faces = &face_vector;
@@ -537,8 +593,7 @@ int main( int argc, char** argv )
         memcpy(display_frame.data, image_buffers[1], HW3*sizeof(unsigned char));
         
         //draw faces from shared vectors
-        pthread_mutex_lock(&face_vector_mutex);
-        
+        pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
         for (int i=0; i<tracked_faces.size(); i++)
         {
             double alpha = ((float)TRACKING_MAX_AGE - tracked_faces[i].age)/TRACKING_MAX_AGE;
@@ -547,7 +602,9 @@ int main( int argc, char** argv )
             col = alpha*col + (1-alpha)*Scalar(0,0,0);
             rectangle(display_frame, tracked_faces[i].box, col, 3); 
         }
-        pthread_mutex_unlock(&face_vector_mutex);
+        pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
+        
+        follow_face(&thread_pointers);
         
         //display and wait for key
         imshow("frame", display_frame);
@@ -572,10 +629,12 @@ int main( int argc, char** argv )
     frown(1);
     frown(-1);
     
+    /*
     driveHead(BB_HEAD_INIT_POS, 120);
     delay(500);
     driveHead(120, BB_HEAD_INIT_POS);
     delay(500);
+    */
 
     shake();
     
@@ -611,6 +670,8 @@ int main( int argc, char** argv )
     resetRobot();
     cout<<"Final reset."<<endl;
     Camera.release();
+    
+    pca9685PWMReset(pca_fd);
     
     return 0;
 }
