@@ -87,14 +87,22 @@ void frown(int mode)
 //shake hand
 void shake()
 {
-  driveDegs(70, BB_PIN_ARM);
-  delay(400);
-  driveDegs(110, BB_PIN_ARM);
-  delay(400);
-  driveDegs(70, BB_PIN_ARM);
-  delay(400);
-  driveDegs(110, BB_PIN_ARM);
-  delay(400);
+  driveDegs(75, BB_PIN_ARM);
+  delay(300);
+  driveDegs(90, BB_PIN_ARM);
+  delay(300);
+  driveDegs(105, BB_PIN_ARM);
+  delay(300);
+  driveDegs(90, BB_PIN_ARM);
+  delay(300);
+  driveDegs(75, BB_PIN_ARM);
+  delay(300);
+  driveDegs(90, BB_PIN_ARM);
+  delay(300);
+  driveDegs(105, BB_PIN_ARM);
+  delay(300);
+  driveDegs(90, BB_PIN_ARM);
+  delay(300);
 }
 
 
