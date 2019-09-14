@@ -8,7 +8,7 @@
 #define BB_VFOV                                 48.8
 
 //Tracking
-#define TRACKING_MAX_AGE          3
+#define TRACKING_MAX_AGE          0
 #define TRACKING_MIN_HITS          5
 #define TRACKING_MIN_IOU            0.05
 #define TRACKING_NUM_COLORS  20
@@ -44,3 +44,8 @@
 //ADC
 #define BB_IR_LEFT		0	//Infrared sensors
 #define BB_IR_RIGHT		1
+
+//face search status
+#define BB_NO_FACE 0
+#define BB_FOUND_FACE 1
+#define BB_FACE_FAR 2

@@ -27,7 +27,6 @@ using namespace std;
 using namespace InferenceEngine;
 
 volatile bool is_running;  //is used to stop threads from main()
-pthread_mutex_t image_buffer_mutex; //mutex for shared image buffer
 pthread_mutex_t face_vector_mutex;    //mutex for shared face vectors (probs and faces)
 
 float g_headPos; //head position
@@ -43,8 +42,7 @@ float g_headPos; //head position
 struct thread_pointers_t
 {
     raspicam::RaspiCam *camera;
-    unsigned char **buffers;
-    int *bufcnt;
+    unsigned char *buffer;
     bool *face_processed;
     NCSWrapper *ncs;
     vector<Rect> *faces;
@@ -88,21 +86,13 @@ void frown(int mode)
 void shake()
 {
   driveDegs(75, BB_PIN_ARM);
-  delay(300);
+  delay(500);
   driveDegs(90, BB_PIN_ARM);
-  delay(300);
+  delay(500);
   driveDegs(105, BB_PIN_ARM);
-  delay(300);
+  delay(500);
   driveDegs(90, BB_PIN_ARM);
-  delay(300);
-  driveDegs(75, BB_PIN_ARM);
-  delay(300);
-  driveDegs(90, BB_PIN_ARM);
-  delay(300);
-  driveDegs(105, BB_PIN_ARM);
-  delay(300);
-  driveDegs(90, BB_PIN_ARM);
-  delay(300);
+  delay(500);
 }
 
 
@@ -241,51 +231,7 @@ void* get_frames(void* pointers)
     int H = pnt->ncs->netInputHeight, W = pnt->ncs->netInputWidth;  //net input image size
     
     unsigned char* frame_data = NULL; //raw frame
-    unsigned char *swap = NULL;  //for swapping buffers
-    
-    while(is_running)
-    {
-        if (*(pnt->bufcnt)<1)
-        {
-            //get raw frame and create Mat for it
-            pnt->camera->grab();           
-            frame_data = pnt->camera->getImageBufferData();
-            Mat frame(BB_RAW_HEIGHT, BB_RAW_WIDTH, CV_8UC3, frame_data);
-            
-            //Create Mats for existing shared image buffers (for convenience)
-            Mat resized_frame(H, W, CV_8UC3, pnt->buffers[0]);
-            
-            //resize frame into shared buffer
-            resize(frame, resized_frame, Size(W,H), 0, 0, INTER_NEAREST);
-            
-            //swap buffers
-            //pthread_mutex_lock(&image_buffer_mutex);
-            swap = pnt->buffers[0];
-            pnt->buffers[0] = pnt->buffers[1];
-            pnt->buffers[1] = swap;
-            *(pnt->bufcnt)+=1;
-            //pthread_mutex_unlock(&image_buffer_mutex);
-            
-            nframes++;
-        }
-        //usleep(1000);  //we dont need it since grab() blocks and waits
-    }
-    //report fps and exit
-    double time = (getTickCount()-start)/getTickFrequency();
-    cout<<"Frame processing FPS: "<<nframes/time<<endl;
-    pthread_exit((void*) 0);
-}
-
-/* Threaded face detection on NCS
- */
-void* detect_faces(void* pointers)
-{
-    //fps evaluation
-    int nframes=0;
-    int64 start = getTickCount();
-    
-    thread_pointers_t* pnt = (thread_pointers_t*) pointers;
-    int H = pnt->ncs->netInputHeight, W = pnt->ncs->netInputWidth;  //net input image size
+        
     float* ncs_output = NULL; //ncs output buffer is provided by wrapper
     bool success = false;
     
@@ -295,82 +241,74 @@ void* detect_faces(void* pointers)
     
     while(is_running)
     {
-        if (*(pnt->bufcnt)>=1)
-        {            
-            //load image into NCS
-            //pthread_mutex_lock(&image_buffer_mutex);
-            Mat data_mat(H, W, CV_8UC3, pnt->buffers[1]);
-            success = pnt->ncs->load_tensor_nowait(data_mat);
-            *(pnt->bufcnt)-=1;
-            //pthread_mutex_unlock(&image_buffer_mutex);
-            if(!success)
-            {
-                pnt->ncs->print_error_code();
-                break;
-            }
-            
-            //now LOCK until result arrives
-            if(!pnt->ncs->get_result(ncs_output))
-            {
-                pnt->ncs->print_error_code();
-                break;
-            }
-            
-            //get result into shared vactors
-            pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
-            
-            //get detections from NCS
-            pnt->faces->clear();
-            pnt->probs->clear();
-            tmp_det.clear();
-            get_detection_boxes(ncs_output, pnt->ncs->maxNumDetectedFaces, 
-                                                    W, H, 0.2, *(pnt->probs), *(pnt->faces));
-            
-            //copy to tmp_det to transform type
-            for (int i=0; i<pnt->faces->size(); i++)
-            {
-                Rect_<float> r = (*(pnt->faces))[i];
-                if ((*(pnt->probs))[i] > 0)
-                    tmp_det.push_back(r);
-            }
-            
-            //if first detections ever: init tracker if possible
-            if (pnt->faces->size()>0 && first_detections)
-            {
-                tracker.init(tmp_det);
-                first_detections = false;
-            }
-            
-            //if tracker initialized, track faces
-            if (!first_detections)
-            {
-                pnt->trfaces->clear();
-                tracker.step(tmp_det, *(pnt->trfaces));
-            }
-            
-            *(pnt->face_processed) = false;
-            cout << "NEW\n";
-            
-            pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
-
-            nframes++;
+        //get raw frame and create Mat for it
+        pnt->camera->grab();           
+        frame_data = pnt->camera->getImageBufferData();
+        Mat frame(BB_RAW_HEIGHT, BB_RAW_WIDTH, CV_8UC3, frame_data);
+        
+        //Create Mats for existing shared image buffers (for convenience)
+        Mat data_mat(H, W, CV_8UC3, pnt->buffer);
+        
+        //resize frame into shared buffer
+        resize(frame, data_mat, Size(W,H), 0, 0, INTER_NEAREST);
+        
+        //load image into NCS
+        success = pnt->ncs->load_tensor_nowait(data_mat);
+        if(!success)
+        {
+            pnt->ncs->print_error_code();
+            break;
         }
-        //usleep(1000);  //we dont need it since get_result() blocks and waits
+        
+        //now LOCK until result arrives
+        if(!pnt->ncs->get_result(ncs_output))
+        {
+            pnt->ncs->print_error_code();
+            break;
+        }
+        
+        //get result into shared vactors
+        pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
+        
+        //get detections from NCS
+        pnt->faces->clear();
+        pnt->probs->clear();
+        tmp_det.clear();
+        get_detection_boxes(ncs_output, pnt->ncs->maxNumDetectedFaces, 
+                                                W, H, 0.2, *(pnt->probs), *(pnt->faces));
+        
+        //copy to tmp_det to transform type
+        for (int i=0; i<pnt->faces->size(); i++)
+        {
+            Rect_<float> r = (*(pnt->faces))[i];
+            if ((*(pnt->probs))[i] > 0)
+                tmp_det.push_back(r);
+        }
+        
+        //if first detections ever: init tracker if possible
+        if (pnt->faces->size()>0 && first_detections)
+        {
+            tracker.init(tmp_det);
+            first_detections = false;
+        }
+        
+        //if tracker initialized, track faces
+        if (!first_detections)
+        {
+            pnt->trfaces->clear();
+            tracker.step(tmp_det, *(pnt->trfaces));
+        }
+        
+        *(pnt->face_processed) = false;
+        
+        pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
+    
+        nframes++;
     }
     //report fps and exit
     double time = (getTickCount()-start)/getTickFrequency();
-    cout<<"Face detection FPS: "<<nframes/time<<endl;
+    cout<<"Frame processing FPS: "<<nframes/time<<endl;
     pthread_exit((void*) 0);
-}
-
-
-void* simpleHeadMove(void* nothing)
-{
-  driveHead(BB_HEAD_INIT_POS, 120);
-  usleep(500);
-  driveHead(120, BB_HEAD_INIT_POS);
-  usleep(500);
-  pthread_exit(NULL);
 }
 
 //set initial position
@@ -383,17 +321,15 @@ void resetRobot()
   delay(2000);
 }
 
-bool follow_face(thread_pointers_t* pointers)
+int follow_face(thread_pointers_t* pointers)
 {
   int H = pointers->ncs->netInputHeight, W = pointers->ncs->netInputWidth;  //net input image size
-  float y = 0, x = 0, dist=0, mindist=100000;
+  float y = 0, x = 0, dist=0, mindist=100000, sign = 0;
   TrackingBox trbox, best_trbox;
   
   while ( *(pointers->face_processed))
-  {
-      cout << "DELAY\n";
       delay(10);
-  }
+  *(pointers->face_processed) = true;
   
   pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
   for (int i=0; i<pointers->trfaces->size(); i++)
@@ -410,19 +346,24 @@ bool follow_face(thread_pointers_t* pointers)
   }
   pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
   
-  y = 0;
-  if (mindist<100000)
-  {
-    y = best_trbox.box.y + best_trbox.box.height/2 - H/2.0;
-    y = y*BB_VFOV/H;
-  }
+  if (mindist >= 100000)
+      return BB_NO_FACE;
   
-  if (abs(y)<3) y = 0;
-  if (abs(y)>0) driveHead(y, 0.1);
-  delay(300);
+  y = best_trbox.box.y + best_trbox.box.height/2 - H/2.0;
+  y = y*BB_VFOV/H * 0.8;
+  sign = float(y>=0)*2 - 1;
   
-  cout << y << endl;
+  if ((g_headPos+sign < BB_HEAD_MIN_LIMIT) or (g_headPos+sign > BB_HEAD_MAX_LIMIT))
+      return BB_FACE_FAR;
   
+  if (abs(y)<5)
+      return BB_FOUND_FACE;
+  
+  driveHead(y, 0.1);
+  delay(200);
+  
+  while ( *(pointers->face_processed))
+      delay(10);
   *(pointers->face_processed) = true;
   
   return true;
@@ -432,6 +373,8 @@ int main( int argc, char** argv )
 {    
     //------------------------------------------------INIT-----------------------------------------------------------------
     is_running = true; //will be used to terminate threads
+    
+    int found_face = BB_NO_FACE;
     
     //NCS interface
     NCSWrapper NCS(true);
@@ -466,14 +409,9 @@ int main( int argc, char** argv )
     //allocate and reset SHARED image buffers
     //use buffer 0 to write transformed data
     //use buffer 1 to read data
-    unsigned char* image_buffers[2]; 
-    int buffer_count = 0;
-    for (int k=0; k<2; k++)
-    {
-        image_buffers[k] = new unsigned char [HW3];
-        for (int i=0; i<HW3; i++)  image_buffers[k][i] = 0;
-    }
-    
+    unsigned char* image_buffer = new unsigned char [HW3]; 
+    for (int i=0; i<HW3; i++)  image_buffer[i] = 0;
+
     //Convenience Mat
     Mat display_frame(H, W, CV_8UC3); // SHARED
     
@@ -482,16 +420,15 @@ int main( int argc, char** argv )
     vector<float> prob_vector;
     //SHARED tracked_faces vector
     vector<TrackingBox> tracked_faces;
+    
+    bool face_processed = true;
 
     //init all mutex
-    pthread_mutex_init(&image_buffer_mutex, NULL);
     pthread_mutex_init(&face_vector_mutex, NULL);
     
     //setup structure to pass to threads
-    bool face_processed = true;
     thread_pointers_t thread_pointers;
-    thread_pointers.buffers = image_buffers;
-    thread_pointers.bufcnt = &buffer_count;
+    thread_pointers.buffer = image_buffer;
     thread_pointers.face_processed = &face_processed;
     thread_pointers.camera = &Camera;
     thread_pointers.ncs = &NCS;
@@ -531,14 +468,11 @@ int main( int argc, char** argv )
     //-------------------------------------------------MAIN BODY-----------------------------------------------------------
     
     //launch threads
-    pthread_t thread_get_frames, thread_detect_faces;
+    pthread_t thread_get_frames;
     int err = 0;
     err = pthread_create(&thread_get_frames, &threadAttr, get_frames, (void*)&thread_pointers);
     if (err)
         cout<<"Failed to create get_frames process with code "<<err<<endl;
-    err = pthread_create(&thread_detect_faces, &threadAttr, detect_faces, (void*)&thread_pointers);
-    if (err)
-        cout<<"Failed to create detect_faces process with code "<<err<<endl;
     
     //cleanup
     pthread_attr_destroy(&threadAttr);
@@ -552,21 +486,20 @@ int main( int argc, char** argv )
     //rendering cycle
     for(;;)
     {
-        memcpy(display_frame.data, image_buffers[1], HW3*sizeof(unsigned char));
+        memcpy(display_frame.data, image_buffer, HW3*sizeof(unsigned char));
         
         //draw faces from shared vectors
         pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
         for (int i=0; i<tracked_faces.size(); i++)
         {
-            double alpha = ((float)TRACKING_MAX_AGE - tracked_faces[i].age)/TRACKING_MAX_AGE;
             Scalar_<int> intcol = colors[tracked_faces[i].id % TRACKING_NUM_COLORS];
             Scalar col = Scalar(intcol[0],intcol[1],intcol[2]);
-            col = alpha*col + (1-alpha)*Scalar(0,0,0);
             rectangle(display_frame, tracked_faces[i].box, col, 3); 
         }
         pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
         
-        follow_face(&thread_pointers);
+        found_face = follow_face(&thread_pointers);
+        cout << found_face << endl;
         
         //display and wait for key
         imshow("frame", display_frame);
@@ -582,21 +515,11 @@ int main( int argc, char** argv )
     err = pthread_join(thread_get_frames, NULL);
     if (err)
         cout<<"Failed to join get_frames process with code "<<err<<endl;
-    err = pthread_join(thread_detect_faces, NULL);
-    if (err)
-        cout<<"Failed to join detect_frames process with code "<<err<<endl;
         
     delay(1000);    
     
     frown(1);
     frown(-1);
-    
-    /*
-    driveHead(BB_HEAD_INIT_POS, 120);
-    delay(500);
-    driveHead(120, BB_HEAD_INIT_POS);
-    delay(500);
-    */
 
     shake();
     
@@ -623,10 +546,7 @@ int main( int argc, char** argv )
     }
 
     //--------------------------------------------RESET--------------------------------------------------
-    delete [] image_buffers[0];
-    delete [] image_buffers[1];
-    
-    pthread_mutex_destroy(&image_buffer_mutex);
+    delete [] image_buffer;
     pthread_mutex_destroy(&face_vector_mutex);
     
     resetRobot();
