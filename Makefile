@@ -1,7 +1,15 @@
 OPENVINO_PATH_RPI := /home/pi/Work/libs/inference_engine_vpu_arm
+COMPILER_FLAGS := -march=armv7-a -std=c++11 -O3 -Wno-psabi
 
-all:
-	g++ -march=armv7-a -std=c++11 -O3 -Wno-psabi \
+all: aux main
+
+aux: mcp vino tracking
+
+clean:
+	rm build/*.o
+
+main:
+	g++  $(COMPILER_FLAGS) \
 	-I/usr/local/include -I. \
 	-I$(OPENVINO_PATH_RPI)/deployment_tools/inference_engine/include \
 	-L/usr/local/lib \
@@ -10,13 +18,30 @@ all:
 	-lraspicam -ldl -linference_engine \
 	-lwiringPiPca9685 -lwiringPi \
 	`pkg-config opencv --cflags --libs` \
-	main.cpp \
-	submodules/mcp3008/mcp3008Spi.cpp \
-	./ncs_wrapper/vino_wrapper.cpp \
-	submodules/sort-cpp/sort-c++/SORTtracker.cpp \
-	submodules/sort-cpp/sort-c++/Hungarian.cpp \
-	submodules/sort-cpp/sort-c++/KalmanTracker.cpp \
+	main.cpp  build/*.o \
 	-o bot
+mcp:
+	mkdir -p build; \
+	g++ -c $(COMPILER_FLAGS) \
+	submodules/mcp3008/mcp3008Spi.cpp \
+	-o build/mcp.o
+vino:
+	mkdir -p build; \
+	g++ -c $(COMPILER_FLAGS) \
+	-I$(OPENVINO_PATH_RPI)/deployment_tools/inference_engine/include \
+	./ncs_wrapper/vino_wrapper.cpp  \
+	-o build/vino.o
+tracking:
+	mkdir -p build; \
+	g++ -c $(COMPILER_FLAGS) \
+	submodules/sort-cpp/sort-c++/SORTtracker.cpp \
+	-o build/sort.o; \
+	g++ -c $(COMPILER_FLAGS) \
+	submodules/sort-cpp/sort-c++/Hungarian.cpp \
+	-o build/hungarian.o; \
+	g++ -c $(COMPILER_FLAGS) \
+	submodules/sort-cpp/sort-c++/KalmanTracker.cpp \
+	-o build/kalman.o
 download_model:
 	mkdir -p data; \
 	wget --no-check-certificate \
