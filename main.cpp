@@ -50,6 +50,12 @@ struct thread_pointers_t
     vector<TrackingBox> *trfaces;
 };
 
+struct thread_sensors_t
+{
+    mcp3008Spi *adc;
+    float *values;
+};
+
 //drive servo PIN at angle ANGLE for SG90 servo
 //angle: [0,180], pin: PIN_BASE(controller)+SERVO_NUM(0-15) or PIN_BASE(controller)+16 for all servos
 void driveDegs(float angle, int pin)
@@ -311,6 +317,29 @@ void* get_frames(void* pointers)
     pthread_exit((void*) 0);
 }
 
+/* Read values from IR sensors in a thread 
+ process them with EWMA*/
+void* get_sensors(void* pointers)
+{
+    float left=0, right=0;
+    thread_sensors_t* pnt = (thread_sensors_t*) pointers;
+    
+    left = analogRead(*(pnt->adc), BB_IR_LEFT) / BB_IR_SCALER_LEFT;
+    right = analogRead(*(pnt->adc), BB_IR_RIGHT) / BB_IR_SCALER_RIGHT;
+    pnt->values[0] = left;
+    pnt->values[1] = right;
+    delay(300);
+    
+    while(is_running)
+    {
+        left = analogRead(*(pnt->adc), BB_IR_LEFT) / BB_IR_SCALER_LEFT;
+        right = analogRead(*(pnt->adc), BB_IR_RIGHT) / BB_IR_SCALER_RIGHT;
+        pnt->values[0] = left*BB_EWMA_GAMMA + (pnt->values[0])*(1-BB_EWMA_GAMMA);
+        pnt->values[1] = right*BB_EWMA_GAMMA + (pnt->values[1])*(1-BB_EWMA_GAMMA);
+        delay(300);
+    }
+}
+
 //set initial position
 void resetRobot()
 {
@@ -426,7 +455,7 @@ int main( int argc, char** argv )
     //init all mutex
     pthread_mutex_init(&face_vector_mutex, NULL);
     
-    //setup structure to pass to threads
+    //setup structure to pass to face thread
     thread_pointers_t thread_pointers;
     thread_pointers.buffer = image_buffer;
     thread_pointers.face_processed = &face_processed;
@@ -460,6 +489,13 @@ int main( int argc, char** argv )
     mcp3008Spi ADC;
     cout<<"MCP3008 chip init"<<endl;
     
+    float IR_values[2];
+    
+    //setup structure to pass to face thread
+    thread_sensors_t thread_sensors_pnt;
+    thread_sensors_pnt.adc = &ADC;
+    thread_sensors_pnt.values = IR_values;
+    
     resetRobot();
     cout<<"Robot reset"<<endl;
     
@@ -468,11 +504,14 @@ int main( int argc, char** argv )
     //-------------------------------------------------MAIN BODY-----------------------------------------------------------
     
     //launch threads
-    pthread_t thread_get_frames;
+    pthread_t thread_get_frames, thread_get_sensors;
     int err = 0;
     err = pthread_create(&thread_get_frames, &threadAttr, get_frames, (void*)&thread_pointers);
     if (err)
         cout<<"Failed to create get_frames process with code "<<err<<endl;
+    err = pthread_create(&thread_get_sensors, &threadAttr, get_sensors, (void*)&thread_sensors_pnt);
+    if (err)
+        cout<<"Failed to create get_sensors process with code "<<err<<endl;
     
     //cleanup
     pthread_attr_destroy(&threadAttr);
@@ -499,7 +538,8 @@ int main( int argc, char** argv )
         pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
         
         found_face = follow_face(&thread_pointers);
-        cout << found_face << endl;
+        cout << "Face: " << found_face << endl;
+        cout<<"L: "<<IR_values[0]<<" R: "<<IR_values[1] << endl;
         
         //display and wait for key
         imshow("frame", display_frame);
@@ -515,6 +555,9 @@ int main( int argc, char** argv )
     err = pthread_join(thread_get_frames, NULL);
     if (err)
         cout<<"Failed to join get_frames process with code "<<err<<endl;
+    err = pthread_join(thread_get_sensors, NULL);
+    if (err)
+        cout<<"Failed to join get_sensors process with code "<<err<<endl;
         
     delay(1000);    
     
@@ -534,16 +577,6 @@ int main( int argc, char** argv )
     delay(1000);
     setSpeedLeft(0);
     setSpeedRight(0);
-    
-    //test IR sensors
-    int val1, val2;
-    for (int i=0; i<100; i++)
-    {
-      val1 = analogRead(ADC, BB_IR_LEFT);
-      val2 = analogRead(ADC, BB_IR_RIGHT);
-      cout<<val1<<"  "<<val2<<endl;
-      delay(100);
-    }
 
     //--------------------------------------------RESET--------------------------------------------------
     delete [] image_buffer;
