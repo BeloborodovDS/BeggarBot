@@ -40,6 +40,7 @@
 #define BB_PIN_LEFT_MOTOR	BB_PCA_PIN_BASE + 3
 #define BB_PIN_RIGHT_MOTOR	BB_PCA_PIN_BASE + 4
 #define BB_PIN_PCA		BB_PCA_PIN_BASE + 16 //all pins on PCA controller 
+#define BB_PIN_SWITCH  0
 
 //ADC
 #define BB_IR_LEFT		0	//Infrared sensors

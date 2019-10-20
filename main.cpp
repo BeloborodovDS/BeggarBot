@@ -398,6 +398,21 @@ int follow_face(thread_pointers_t* pointers)
   return true;
 }
 
+void* track_button(void*)
+{
+    pinMode(BB_PIN_SWITCH, INPUT);
+    pullUpDnControl(BB_PIN_SWITCH, PUD_UP);
+    
+    int button;
+    
+    while (is_running)
+    {
+        button = digitalRead(BB_PIN_SWITCH);
+        if (button == 1) is_running = false;
+        delay(50);
+    }
+}
+
 int main( int argc, char** argv )
 {    
     //------------------------------------------------INIT-----------------------------------------------------------------
@@ -504,7 +519,7 @@ int main( int argc, char** argv )
     //-------------------------------------------------MAIN BODY-----------------------------------------------------------
     
     //launch threads
-    pthread_t thread_get_frames, thread_get_sensors;
+    pthread_t thread_get_frames, thread_get_sensors, thread_track_button;
     int err = 0;
     err = pthread_create(&thread_get_frames, &threadAttr, get_frames, (void*)&thread_pointers);
     if (err)
@@ -512,6 +527,9 @@ int main( int argc, char** argv )
     err = pthread_create(&thread_get_sensors, &threadAttr, get_sensors, (void*)&thread_sensors_pnt);
     if (err)
         cout<<"Failed to create get_sensors process with code "<<err<<endl;
+    err = pthread_create(&thread_track_button, &threadAttr, track_button, (void*)NULL);
+    if (err)
+        cout<<"Failed to create track_button process with code "<<err<<endl;
     
     //cleanup
     pthread_attr_destroy(&threadAttr);
@@ -523,7 +541,7 @@ int main( int argc, char** argv )
         rng.fill(colors[i], RNG::UNIFORM, 0, 256);
     
     //rendering cycle
-    for(;;)
+    while(is_running)
     {
         memcpy(display_frame.data, image_buffer, HW3*sizeof(unsigned char));
         
@@ -558,6 +576,9 @@ int main( int argc, char** argv )
     err = pthread_join(thread_get_sensors, NULL);
     if (err)
         cout<<"Failed to join get_sensors process with code "<<err<<endl;
+    err = pthread_join(thread_track_button, NULL);
+    if (err)
+        cout<<"Failed to join track_button process with code "<<err<<endl;
         
     delay(1000);    
     
