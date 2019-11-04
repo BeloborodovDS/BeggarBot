@@ -9,6 +9,7 @@
 #include <set>
 #include <cstring>
 #include <future>
+#include <atomic>
 #include <unistd.h>
 
 #include <pthread.h>
@@ -27,7 +28,7 @@ using namespace cv;
 using namespace std;
 using namespace InferenceEngine;
 
-volatile bool is_running;  //is used to stop threads from main()
+std::atomic_bool is_running;  //is used to stop threads from main()
 pthread_mutex_t face_vector_mutex;    //mutex for shared face vectors (probs and faces)
 
 float g_headPos; //head position
@@ -44,7 +45,7 @@ struct thread_pointers_t
 {
     raspicam::RaspiCam *camera;
     unsigned char *buffer;
-    bool *face_processed;
+    std::atomic_bool *face_processed;
     NCSWrapper *ncs;
     vector<Rect> *faces;
     vector<float> *probs;
@@ -54,7 +55,7 @@ struct thread_pointers_t
 struct thread_sensors_t
 {
     mcp3008Spi *adc;
-    float *values;
+    std::atomic<float> *values;
 };
 
 //drive servo PIN at angle ANGLE for SG90 servo
@@ -345,8 +346,10 @@ void* get_sensors(void* pointers)
     {
         left = analogRead(*(pnt->adc), BB_IR_LEFT) / BB_IR_SCALER_LEFT;
         right = analogRead(*(pnt->adc), BB_IR_RIGHT) / BB_IR_SCALER_RIGHT;
-        pnt->values[0] = left*BB_EWMA_GAMMA + (pnt->values[0])*(1-BB_EWMA_GAMMA);
-        pnt->values[1] = right*BB_EWMA_GAMMA + (pnt->values[1])*(1-BB_EWMA_GAMMA);
+        left = left*BB_EWMA_GAMMA + (pnt->values[0])*(1-BB_EWMA_GAMMA);
+        right = right*BB_EWMA_GAMMA + (pnt->values[1])*(1-BB_EWMA_GAMMA);
+        pnt->values[0] = left;
+        pnt->values[1] = right;
         delay(300);
     }
 }
@@ -481,7 +484,7 @@ int main( int argc, char** argv )
     //SHARED tracked_faces vector
     vector<TrackingBox> tracked_faces;
     
-    bool face_processed = true;
+    std::atomic_bool face_processed (true);
 
     //init all mutex
     pthread_mutex_init(&face_vector_mutex, NULL);
@@ -520,7 +523,7 @@ int main( int argc, char** argv )
     mcp3008Spi ADC;
     cout<<"MCP3008 chip init"<<endl;
     
-    float IR_values[2];
+    std::atomic<float> IR_values[2];
     
     //setup structure to pass to face thread
     thread_sensors_t thread_sensors_pnt;
