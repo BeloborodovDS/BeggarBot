@@ -390,16 +390,16 @@ int follow_face(thread_pointers_t* pointers)
       return BB_NO_FACE;
   
   y = best_trbox.box.y + best_trbox.box.height/2 - H/2.0;
-  y = y*BB_VFOV/H * 0.8;
+  y = y*BB_VFOV/H;
   sign = float(y>=0)*2 - 1;
   
   x = best_trbox.box.x + best_trbox.box.width/2 - W/2.0;
-  x = x*BB_HFOV/W * 0.8;
+  x = x*BB_HFOV/W;
   
   if ((g_headPos+sign < BB_HEAD_MIN_LIMIT) or (g_headPos+sign > BB_HEAD_MAX_LIMIT))
       return BB_FACE_FAR;
   
-  if ((abs(y)<5) and (abs(x)<5))
+  if ((abs(y) < BB_FOLLOW_TOLERANCE * H) and (abs(x) < BB_FOLLOW_TOLERANCE * W))
       return BB_FOUND_FACE;
   
   auto waitRotation = std::async(std::launch::async, rotatePlatform, x);

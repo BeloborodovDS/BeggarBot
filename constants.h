@@ -4,8 +4,8 @@
 #define BB_FACE_MODEL                       "./data/face_vino"
 
 //Camera field of view
-#define BB_HFOV                                 62.2
-#define BB_VFOV                                 48.8
+#define BB_HFOV                                 62.2 * 0.8
+#define BB_VFOV                                 48.8 * 0.8
 
 //Platform
 #define BB_DEG_PER_SECOND       90.0
@@ -57,3 +57,4 @@
 #define BB_NO_FACE 0
 #define BB_FOUND_FACE 1
 #define BB_FACE_FAR 2
+#define BB_FOLLOW_TOLERANCE  0.015
