@@ -8,6 +8,7 @@
 #include <fstream>
 #include <set>
 #include <cstring>
+#include <future>
 #include <unistd.h>
 
 #include <pthread.h>
@@ -401,11 +402,10 @@ int follow_face(thread_pointers_t* pointers)
   if ((abs(y)<5) and (abs(x)<5))
       return BB_FOUND_FACE;
   
-  rotatePlatform(x);
+  auto waitRotation = std::async(std::launch::async, rotatePlatform, x);
+  driveHead(y, 0.1);
+  waitRotation.wait();
   delay(200);
-  
-  //driveHead(y, 0.1);
-  //delay(200);
   
   while ( *(pointers->face_processed))
       delay(10);
