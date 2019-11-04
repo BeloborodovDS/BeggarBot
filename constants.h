@@ -7,6 +7,9 @@
 #define BB_HFOV                                 62.2
 #define BB_VFOV                                 48.8
 
+//Platform
+#define BB_DEG_PER_SECOND       90.0
+
 //Tracking
 #define TRACKING_MAX_AGE          0
 #define TRACKING_MIN_HITS          5

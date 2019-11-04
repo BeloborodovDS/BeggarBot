@@ -157,6 +157,16 @@ void setSpeedRight(float speed)
   pwmWrite(BB_PIN_RIGHT_MOTOR, ticks);
 }
 
+void rotatePlatform(float degrees)
+{
+    float sign = 2*float(degrees >= 0)  - 1;
+    setSpeedLeft(sign);
+    setSpeedRight(-sign);
+    delay(1000 * sign * degrees / BB_DEG_PER_SECOND);
+    setSpeedLeft(0);
+    setSpeedRight(0);
+}
+
 //analog read from MCP3008 ADC chip
 //adc: mcp3008Spi object
 //channel: 0..7
@@ -382,14 +392,20 @@ int follow_face(thread_pointers_t* pointers)
   y = y*BB_VFOV/H * 0.8;
   sign = float(y>=0)*2 - 1;
   
+  x = best_trbox.box.x + best_trbox.box.width/2 - W/2.0;
+  x = x*BB_HFOV/W * 0.8;
+  
   if ((g_headPos+sign < BB_HEAD_MIN_LIMIT) or (g_headPos+sign > BB_HEAD_MAX_LIMIT))
       return BB_FACE_FAR;
   
-  if (abs(y)<5)
+  if ((abs(y)<5) and (abs(x)<5))
       return BB_FOUND_FACE;
   
-  driveHead(y, 0.1);
+  rotatePlatform(x);
   delay(200);
+  
+  //driveHead(y, 0.1);
+  //delay(200);
   
   while ( *(pointers->face_processed))
       delay(10);
