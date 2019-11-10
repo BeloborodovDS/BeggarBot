@@ -33,7 +33,7 @@
 #define BB_HEAD_DT		10 //ms time span 
 #define BB_HEAD_MAX_STEP	BB_HEAD_DT * BB_SERVO_MAX_SPEED
 #define BB_HEAD_INIT_POS	50.0 //initial angle
-#define BB_HEAD_MIN_LIMIT	40.0
+#define BB_HEAD_MIN_LIMIT	10.0
 #define BB_HEAD_MAX_LIMIT	90.0
 
 //PINS
