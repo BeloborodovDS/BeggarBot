@@ -159,6 +159,12 @@ void setSpeedRight(float speed)
   pwmWrite(BB_PIN_RIGHT_MOTOR, ticks);
 }
 
+void setSpeed(float speed_left, float speed_right)
+{
+  setSpeedLeft(speed_left);
+  setSpeedRight(speed_right);  
+}
+
 void rotatePlatform(float degrees)
 {
     float sign = 2*float(degrees >= 0)  - 1;
@@ -340,7 +346,7 @@ void* get_sensors(void* pointers)
     right = analogRead(*(pnt->adc), BB_IR_RIGHT) / BB_IR_SCALER_RIGHT;
     pnt->values[0] = left;
     pnt->values[1] = right;
-    delay(300);
+    delay(10);
     
     while(is_running)
     {
@@ -350,7 +356,7 @@ void* get_sensors(void* pointers)
         right = right*BB_EWMA_GAMMA + (pnt->values[1])*(1-BB_EWMA_GAMMA);
         pnt->values[0] = left;
         pnt->values[1] = right;
-        delay(300);
+        delay(10);
     }
 }
 
@@ -564,9 +570,12 @@ int main( int argc, char** argv )
     for (int i = 0; i < TRACKING_NUM_COLORS; i++)
         rng.fill(colors[i], RNG::UNIFORM, 0, 256);
     
+    float left=0, right=0;
+    
     //rendering cycle
     while(is_running)
     {
+        /*
         memcpy(display_frame.data, image_buffer, HW3*sizeof(unsigned char));
         
         //draw faces from shared vectors
@@ -578,31 +587,60 @@ int main( int argc, char** argv )
             rectangle(display_frame, tracked_faces[i].box, col, 3); 
         }
         pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
+        */
         
         found_face = follow_face(&thread_pointers);
+        while (found_face == BB_FACE_BUSY and is_running)
+            found_face = follow_face(&thread_pointers);
         
-        cout<<"L: "<<IR_values[0]<<" R: "<<IR_values[1] << endl;
+        left = IR_values[0];
+        right = IR_values[1];
         
-        if (found_face == 0)
-            cout << "---\n";
-        else if (found_face==1)
-            cout << "...........BUSY\n";
-        else if (found_face==2)
-            cout << "far\n";
-        else if (found_face==3)
-            cout << "CLOSE\n";
-        else 
-            cout << "!!!!!! LIMIT \n";
+        cout << left << "   " << right << endl;
+        
+        if (found_face == BB_FOUND_FACE)
+        {
+            setSpeed(0, 0);
+            shake();
+            delay(1000);
+            frown(1);
+            shake();
+            delay(1000);
+            frown(0);
+            driveHead(BB_HEAD_INIT_POS - g_headPos);
+            rotatePlatform(180);
+        }
+        else if (found_face == BB_FACE_LIMIT)
+        {
+            setSpeed(0, 0);
+            frown(-1);
+            delay(1000);
+            rotatePlatform(180);
+        }
+        else
+        {            
+            if (left < 1 and right < 1)
+                setSpeed(1, 1);
+            else if (left > right)
+                setSpeed(1, -1);
+            else
+                setSpeed(-1, 1);
+            delay(10);
+        }
         
         //display and wait for key
+        /*
         imshow("frame", display_frame);
         usleep(40000);
         if(waitKey(1)!=-1)
         {
             break;
         }
+        */
     }
     is_running = false;
+    
+    setSpeed(0, 0);
     
     //join threads
     err = pthread_join(thread_get_frames, NULL);

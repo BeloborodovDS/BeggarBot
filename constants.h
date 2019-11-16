@@ -49,8 +49,8 @@
 #define BB_IR_LEFT		0	//Infrared sensors
 #define BB_IR_RIGHT		1
 
-#define BB_IR_SCALER_LEFT       755.0
-#define BB_IR_SCALER_RIGHT      634.5
+#define BB_IR_SCALER_LEFT       468.25
+#define BB_IR_SCALER_RIGHT      442.72
 #define BB_EWMA_GAMMA           0.7
 
 //face search status
