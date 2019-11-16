@@ -55,6 +55,11 @@
 
 //face search status
 #define BB_NO_FACE 0
-#define BB_FOUND_FACE 1
+#define BB_FACE_BUSY 1
 #define BB_FACE_FAR 2
+#define BB_FOUND_FACE 3
+#define BB_FACE_LIMIT 4
+
 #define BB_FOLLOW_TOLERANCE  0.015
+#define BB_FACE_AREA 0.012
+

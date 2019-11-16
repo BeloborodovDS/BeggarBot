@@ -400,10 +400,15 @@ int follow_face(thread_pointers_t* pointers)
   x = x*BB_HFOV/W;
   
   if ((g_headPos+sign < BB_HEAD_MIN_LIMIT) or (g_headPos+sign > BB_HEAD_MAX_LIMIT))
-      return BB_FACE_FAR;
+      return BB_FACE_LIMIT;
   
   if ((abs(y) < BB_FOLLOW_TOLERANCE * H) and (abs(x) < BB_FOLLOW_TOLERANCE * W))
+  {
+    if (best_trbox.box.height * best_trbox.box.width / (H*W) < BB_FACE_AREA)
+      return BB_FACE_FAR;
+    else
       return BB_FOUND_FACE;
+  }
   
   auto waitRotation = std::async(std::launch::async, rotatePlatform, x);
   driveHead(y, 0.1);
@@ -414,7 +419,7 @@ int follow_face(thread_pointers_t* pointers)
       delay(10);
   *(pointers->face_processed) = true;
   
-  return true;
+  return BB_FACE_BUSY;
 }
 
 void* track_button(void*)
@@ -575,8 +580,19 @@ int main( int argc, char** argv )
         pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
         
         found_face = follow_face(&thread_pointers);
-        cout << "Face: " << found_face << endl;
+        
         cout<<"L: "<<IR_values[0]<<" R: "<<IR_values[1] << endl;
+        
+        if (found_face == 0)
+            cout << "---\n";
+        else if (found_face==1)
+            cout << "...........BUSY\n";
+        else if (found_face==2)
+            cout << "far\n";
+        else if (found_face==3)
+            cout << "CLOSE\n";
+        else 
+            cout << "!!!!!! LIMIT \n";
         
         //display and wait for key
         imshow("frame", display_frame);
