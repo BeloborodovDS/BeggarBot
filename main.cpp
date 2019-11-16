@@ -603,12 +603,18 @@ int main( int argc, char** argv )
             setSpeed(0, 0);
             shake();
             delay(1000);
-            frown(1);
-            shake();
-            delay(1000);
-            frown(0);
+            found_face = follow_face(&thread_pointers);
+            if (found_face == BB_NO_FACE)
+                frown(-1);
+            else
+            {
+                frown(1);
+                shake();
+                delay(1000);
+            }
             driveHead(BB_HEAD_INIT_POS - g_headPos);
             rotatePlatform(180);
+            frown(0);
         }
         else if (found_face == BB_FACE_LIMIT)
         {
