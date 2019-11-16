@@ -564,31 +564,11 @@ int main( int argc, char** argv )
     //cleanup
     pthread_attr_destroy(&threadAttr);
     
-    //colors for faces ids
-    RNG rng(0xFFFFFFFF);
-    Scalar_<int> colors[TRACKING_NUM_COLORS];
-    for (int i = 0; i < TRACKING_NUM_COLORS; i++)
-        rng.fill(colors[i], RNG::UNIFORM, 0, 256);
+    float left=0, right=0, alpha=0;
     
-    float left=0, right=0;
-    
-    //rendering cycle
+    //main cycle
     while(is_running)
-    {
-        /*
-        memcpy(display_frame.data, image_buffer, HW3*sizeof(unsigned char));
-        
-        //draw faces from shared vectors
-        pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
-        for (int i=0; i<tracked_faces.size(); i++)
-        {
-            Scalar_<int> intcol = colors[tracked_faces[i].id % TRACKING_NUM_COLORS];
-            Scalar col = Scalar(intcol[0],intcol[1],intcol[2]);
-            rectangle(display_frame, tracked_faces[i].box, col, 3); 
-        }
-        pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
-        */
-        
+    {        
         found_face = follow_face(&thread_pointers);
         while (found_face == BB_FACE_BUSY and is_running)
             found_face = follow_face(&thread_pointers);
@@ -625,24 +605,15 @@ int main( int argc, char** argv )
         }
         else
         {            
+            alpha = rand() % 91;
             if (left < 1 and right < 1)
                 setSpeed(1, 1);
             else if (left > right)
-                setSpeed(1, -1);
+                rotatePlatform(alpha);
             else
-                setSpeed(-1, 1);
+                rotatePlatform(-alpha);
             delay(10);
         }
-        
-        //display and wait for key
-        /*
-        imshow("frame", display_frame);
-        usleep(40000);
-        if(waitKey(1)!=-1)
-        {
-            break;
-        }
-        */
     }
     is_running = false;
     
@@ -658,25 +629,7 @@ int main( int argc, char** argv )
     err = pthread_join(thread_track_button, NULL);
     if (err)
         cout<<"Failed to join track_button process with code "<<err<<endl;
-        
-    delay(1000);    
-    
-    frown(1);
-    frown(-1);
 
-    shake();
-    
-    setSpeedLeft(1);
-    setSpeedRight(1);
-    delay(1000);
-    setSpeedLeft(0);
-    setSpeedRight(0);
-    delay(1000);
-    setSpeedLeft(-1);
-    setSpeedRight(-1);
-    delay(1000);
-    setSpeedLeft(0);
-    setSpeedRight(0);
 
     //--------------------------------------------RESET--------------------------------------------------
     delete [] image_buffer;
