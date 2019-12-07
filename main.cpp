@@ -565,6 +565,7 @@ int main( int argc, char** argv )
     pthread_attr_destroy(&threadAttr);
     
     float left=0, right=0, alpha=0;
+    int roam_counter = 0;
     
     //main cycle
     while(is_running)
@@ -580,6 +581,7 @@ int main( int argc, char** argv )
         
         if (found_face == BB_FOUND_FACE)
         {
+            roam_counter = 0;
             setSpeed(0, 0);
             shake();
             delay(1000);
@@ -598,6 +600,7 @@ int main( int argc, char** argv )
         }
         else if (found_face == BB_FACE_LIMIT)
         {
+            roam_counter = 0;
             setSpeed(0, 0);
             frown(-1);
             delay(1000);
@@ -607,11 +610,34 @@ int main( int argc, char** argv )
         {            
             alpha = rand() % 91;
             if (left < 1 and right < 1)
+            {
                 setSpeed(1, 1);
+                roam_counter ++;
+            }
+            else if (left >=1 and right >=1)
+            {
+                rotatePlatform(180);
+                roam_counter = 0;
+            }
             else if (left > right)
+            {
                 rotatePlatform(alpha);
+                roam_counter = 0;
+            }
             else
+            {
                 rotatePlatform(-alpha);
+                roam_counter = 0;
+            }
+            
+            if (roam_counter > BB_ROAM_LIMIT)
+            {
+                roam_counter = 0;
+                setSpeed(-1, -1);
+                delay(1000);
+                rotatePlatform(90 + rand() % 181);
+                setSpeed(1, 1);
+            }
             delay(10);
         }
     }

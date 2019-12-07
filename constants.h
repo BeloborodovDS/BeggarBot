@@ -63,3 +63,5 @@
 #define BB_FOLLOW_TOLERANCE  0.015
 #define BB_FACE_AREA 0.012
 
+#define BB_ROAM_LIMIT 100
+
