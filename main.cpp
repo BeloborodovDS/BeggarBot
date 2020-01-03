@@ -466,12 +466,13 @@ int main( int argc, char** argv )
     //Init camera
     //setup camera
     raspicam::RaspiCam Camera;
-    Camera.setContrast(100);//50
-    Camera.setISO(800);//500
-    Camera.setSaturation(-100);//-20
+    Camera.setFormat(raspicam::RASPICAM_FORMAT_BGR);
+    //Camera.setContrast(100);//50
+    //Camera.setISO(800);//500
+    //Camera.setSaturation(-0);//-20
     Camera.setVideoStabilization(true);
     Camera.setExposure(raspicam::RASPICAM_EXPOSURE_ANTISHAKE);
-    Camera.setAWB(raspicam::RASPICAM_AWB_AUTO);
+    Camera.setAWB(raspicam::RASPICAM_AWB_SHADE);
     
     if ( !Camera.open() ) 
     {
@@ -575,7 +576,6 @@ int main( int argc, char** argv )
     //rendering cycle
     while(is_running)
     {
-        /*
         memcpy(display_frame.data, image_buffer, HW3*sizeof(unsigned char));
         
         //draw faces from shared vectors
@@ -587,62 +587,15 @@ int main( int argc, char** argv )
             rectangle(display_frame, tracked_faces[i].box, col, 3); 
         }
         pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
-        */
+
         
-        found_face = follow_face(&thread_pointers);
-        while (found_face == BB_FACE_BUSY and is_running)
-            found_face = follow_face(&thread_pointers);
-        
-        left = IR_values[0];
-        right = IR_values[1];
-        
-        cout << left << "   " << right << endl;
-        
-        if (found_face == BB_FOUND_FACE)
-        {
-            setSpeed(0, 0);
-            shake();
-            delay(1000);
-            found_face = follow_face(&thread_pointers);
-            if (found_face == BB_NO_FACE)
-                frown(-1);
-            else
-            {
-                frown(1);
-                shake();
-                delay(1000);
-            }
-            driveHead(BB_HEAD_INIT_POS - g_headPos);
-            rotatePlatform(180);
-            frown(0);
-        }
-        else if (found_face == BB_FACE_LIMIT)
-        {
-            setSpeed(0, 0);
-            frown(-1);
-            delay(1000);
-            rotatePlatform(180);
-        }
-        else
-        {            
-            if (left < 1 and right < 1)
-                setSpeed(1, 1);
-            else if (left > right)
-                setSpeed(1, -1);
-            else
-                setSpeed(-1, 1);
-            delay(10);
-        }
-        
-        //display and wait for key
-        /*
         imshow("frame", display_frame);
         usleep(40000);
         if(waitKey(1)!=-1)
         {
             break;
         }
-        */
+        
     }
     is_running = false;
     
@@ -659,24 +612,6 @@ int main( int argc, char** argv )
     if (err)
         cout<<"Failed to join track_button process with code "<<err<<endl;
         
-    delay(1000);    
-    
-    frown(1);
-    frown(-1);
-
-    shake();
-    
-    setSpeedLeft(1);
-    setSpeedRight(1);
-    delay(1000);
-    setSpeedLeft(0);
-    setSpeedRight(0);
-    delay(1000);
-    setSpeedLeft(-1);
-    setSpeedRight(-1);
-    delay(1000);
-    setSpeedLeft(0);
-    setSpeedRight(0);
 
     //--------------------------------------------RESET--------------------------------------------------
     delete [] image_buffer;
