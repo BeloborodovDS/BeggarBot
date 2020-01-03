@@ -466,12 +466,10 @@ int main( int argc, char** argv )
     //Init camera
     //setup camera
     raspicam::RaspiCam Camera;
-    Camera.setContrast(100);//50
-    Camera.setISO(800);//500
-    Camera.setSaturation(-100);//-20
+    Camera.setFormat(raspicam::RASPICAM_FORMAT_BGR);
     Camera.setVideoStabilization(true);
     Camera.setExposure(raspicam::RASPICAM_EXPOSURE_ANTISHAKE);
-    Camera.setAWB(raspicam::RASPICAM_AWB_AUTO);
+    Camera.setAWB(raspicam::RASPICAM_AWB_SHADE);
     
     if ( !Camera.open() ) 
     {
