@@ -575,8 +575,6 @@ int main( int argc, char** argv )
         left = IR_values[0];
         right = IR_values[1];
         
-        cout << left << "   " << right << endl;
-        
         if (found_face == BB_FOUND_FACE)
         {
             roam_counter = 0;
