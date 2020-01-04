@@ -35,11 +35,11 @@ float g_headPos; //head position
 
 /* Struct to pass to threads
  * camera: pointer to RaspiCam camera
- * buffers: pointer to shared image buffers
- * bufcnt: counter of filled buffers
+ * buffer: pointer to shared image buffer
+ * face_processed: flag to process data only once
  * ncs: pointer to NCSWrapper instance
  * faces, probs: pointers to shared face and prob vectors
- * trfaces, trprobs: pointers to tracked faces and auxilary values
+ * trfaces: pointers to tracked faces and auxilary values
  */
 struct thread_pointers_t
 {
@@ -52,6 +52,7 @@ struct thread_pointers_t
     vector<TrackingBox> *trfaces;
 };
 
+//struct used in a separate thread to read from IR sensors
 struct thread_sensors_t
 {
     mcp3008Spi *adc;
@@ -68,6 +69,7 @@ void driveDegs(float angle, int pin)
   pwmWrite(pin, ticks);
 }
 
+//drive servo by pulse width value
 void driveMs(float Ms, int pin)
 {
   float cycleMs = 1000.0f / BB_PCA_HERTZ;
@@ -108,10 +110,11 @@ void shake()
 //speed is ratio from SERVO_MAX_SPEED, in [0,1]
 void driveHead(float delta_angle, float speed = 0.1)
 {
+  // limits
   if (speed > 1) speed = 1;
   if (speed < 0) speed = 0;
   float an_from = g_headPos, an_to = g_headPos+delta_angle;
-  if (an_to > BB_HEAD_MAX_LIMIT) an_to = BB_HEAD_MAX_LIMIT; //angle is limited in [45, 135] for safety reasons
+  if (an_to > BB_HEAD_MAX_LIMIT) an_to = BB_HEAD_MAX_LIMIT;
   if (an_to < BB_HEAD_MIN_LIMIT) an_to = BB_HEAD_MIN_LIMIT;
   if (an_from < 0) an_from = 0;
   if (an_from > 180) an_from = 180;
@@ -159,12 +162,14 @@ void setSpeedRight(float speed)
   pwmWrite(BB_PIN_RIGHT_MOTOR, ticks);
 }
 
+//set speed for left and right wheels
 void setSpeed(float speed_left, float speed_right)
 {
   setSpeedLeft(speed_left);
   setSpeedRight(speed_right);  
 }
 
+//rotate platform: > 0: clockwise, < 0: counter-clockwise
 void rotatePlatform(float degrees)
 {
     float sign = 2*float(degrees >= 0)  - 1;
@@ -342,14 +347,17 @@ void* get_sensors(void* pointers)
     float left=0, right=0;
     thread_sensors_t* pnt = (thread_sensors_t*) pointers;
     
+    // initial read
     left = analogRead(*(pnt->adc), BB_IR_LEFT) / BB_IR_SCALER_LEFT;
     right = analogRead(*(pnt->adc), BB_IR_RIGHT) / BB_IR_SCALER_RIGHT;
     pnt->values[0] = left;
     pnt->values[1] = right;
     delay(10);
     
+    // other reads
     while(is_running)
     {
+        // read and update by EWMA
         left = analogRead(*(pnt->adc), BB_IR_LEFT) / BB_IR_SCALER_LEFT;
         right = analogRead(*(pnt->adc), BB_IR_RIGHT) / BB_IR_SCALER_RIGHT;
         left = left*BB_EWMA_GAMMA + (pnt->values[0])*(1-BB_EWMA_GAMMA);
@@ -370,16 +378,19 @@ void resetRobot()
   delay(2000);
 }
 
+// find closest to center face and try to align to it
 int follow_face(thread_pointers_t* pointers)
 {
   int H = pointers->ncs->netInputHeight, W = pointers->ncs->netInputWidth;  //net input image size
   float y = 0, x = 0, dist=0, mindist=100000, sign = 0;
   TrackingBox trbox, best_trbox;
   
+  // wait for another processed frame
   while ( *(pointers->face_processed))
       delay(10);
   *(pointers->face_processed) = true;
   
+  // find face closest to frame center
   pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
   for (int i=0; i<pointers->trfaces->size(); i++)
   {
@@ -395,9 +406,11 @@ int follow_face(thread_pointers_t* pointers)
   }
   pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
   
+  // no face detected
   if (mindist >= 100000)
       return BB_NO_FACE;
   
+  // calculate displace of face center from frame center
   y = best_trbox.box.y + best_trbox.box.height/2 - H/2.0;
   y = y*BB_VFOV/H;
   sign = float(y>=0)*2 - 1;
@@ -405,29 +418,36 @@ int follow_face(thread_pointers_t* pointers)
   x = best_trbox.box.x + best_trbox.box.width/2 - W/2.0;
   x = x*BB_HFOV/W;
   
+  // cannot move head further
   if ((g_headPos+sign < BB_HEAD_MIN_LIMIT) or (g_headPos+sign > BB_HEAD_MAX_LIMIT))
       return BB_FACE_LIMIT;
   
+  // close enough to center
   if ((abs(y) < BB_FOLLOW_TOLERANCE * H) and (abs(x) < BB_FOLLOW_TOLERANCE * W))
   {
+    // too small face
     if (best_trbox.box.height * best_trbox.box.width / (H*W) < BB_FACE_AREA)
       return BB_FACE_FAR;
     else
       return BB_FOUND_FACE;
   }
   
+  // rotate platform and move head asynchronously
   auto waitRotation = std::async(std::launch::async, rotatePlatform, x);
   driveHead(y, 0.1);
   waitRotation.wait();
   delay(200);
   
+  // wait for next processed frame just in case
   while ( *(pointers->face_processed))
       delay(10);
   *(pointers->face_processed) = true;
   
+  // moving robot
   return BB_FACE_BUSY;
 }
 
+// set "is_running" as a read from switch
 void* track_button(void*)
 {
     pinMode(BB_PIN_SWITCH, INPUT);
@@ -562,26 +582,32 @@ int main( int argc, char** argv )
     //cleanup
     pthread_attr_destroy(&threadAttr);
     
+    // for navigation
     float left=0, right=0, alpha=0, sign=1;
     int roam_counter = 0;
     
     //main cycle
     while(is_running)
-    {        
+    {
+        // while face is seen, align to it
         found_face = follow_face(&thread_pointers);
         while (found_face == BB_FACE_BUSY and is_running)
             found_face = follow_face(&thread_pointers);
         
+        // read sensors
         left = IR_values[0];
         right = IR_values[1];
         
+        // face detected => perform
         if (found_face == BB_FOUND_FACE)
         {
+            // stop, shake and detect face again
             roam_counter = 0;
             setSpeed(0, 0);
             shake();
             delay(1000);
             found_face = follow_face(&thread_pointers);
+            // if face is gone, angry frown, else shake again
             if (found_face == BB_NO_FACE)
                 frown(-1);
             else
@@ -590,10 +616,12 @@ int main( int argc, char** argv )
                 shake();
                 delay(1000);
             }
+            // turn and go
             driveHead(BB_HEAD_INIT_POS - g_headPos);
             rotatePlatform(180);
             frown(0);
         }
+        // if face over limit => angry frown
         else if (found_face == BB_FACE_LIMIT)
         {
             roam_counter = 0;
@@ -602,28 +630,33 @@ int main( int argc, char** argv )
             delay(1000);
             rotatePlatform(180);
         }
+        // no face of face too far: random exploration
         else
         {     
-            alpha = rand() % 91;
-            sign = (rand() % 2) * 2 - 1;
+            alpha = rand() % 91; // [0, 90]
+            sign = (rand() % 2) * 2 - 1; // {-1, 1}
             
+            // obstacles far: go forward
             if (left < 1 and right < 1)
             {
                 setSpeed(1, 1);
                 roam_counter ++;
             }
+            // obstacles close: random rotate [90, 180] u [-180, -90]
             else if (left >=1 and right >=1)
             {
                 rotatePlatform((90 + alpha) * sign);
                 roam_counter = 0;
                 driveHead(BB_HEAD_INIT_POS - g_headPos);
             }
+            // obstacles to the right: rotate left 
             else if (left > right)
             {
                 rotatePlatform(alpha);
                 roam_counter = 0;
                 driveHead(BB_HEAD_INIT_POS - g_headPos);
             }
+            // obstacles to the left: rotate right
             else
             {
                 rotatePlatform(-alpha);
@@ -631,6 +664,7 @@ int main( int argc, char** argv )
                 driveHead(BB_HEAD_INIT_POS - g_headPos);
             }
             
+            // if going forward for too long (stuck): go back a little and random rotate
             if (roam_counter > BB_ROAM_LIMIT)
             {
                 roam_counter = 0;
@@ -642,7 +676,6 @@ int main( int argc, char** argv )
             delay(10);
         }
     }
-    is_running = false;
     
     setSpeed(0, 0);
     
