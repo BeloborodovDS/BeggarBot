@@ -562,7 +562,7 @@ int main( int argc, char** argv )
     //cleanup
     pthread_attr_destroy(&threadAttr);
     
-    float left=0, right=0, alpha=0;
+    float left=0, right=0, alpha=0, sign=1;
     int roam_counter = 0;
     
     //main cycle
@@ -603,8 +603,10 @@ int main( int argc, char** argv )
             rotatePlatform(180);
         }
         else
-        {            
+        {     
             alpha = rand() % 91;
+            sign = (rand() % 2) * 2 - 1;
+            
             if (left < 1 and right < 1)
             {
                 setSpeed(1, 1);
@@ -612,18 +614,21 @@ int main( int argc, char** argv )
             }
             else if (left >=1 and right >=1)
             {
-                rotatePlatform(180);
+                rotatePlatform((90 + alpha) * sign);
                 roam_counter = 0;
+                driveHead(BB_HEAD_INIT_POS - g_headPos);
             }
             else if (left > right)
             {
                 rotatePlatform(alpha);
                 roam_counter = 0;
+                driveHead(BB_HEAD_INIT_POS - g_headPos);
             }
             else
             {
                 rotatePlatform(-alpha);
                 roam_counter = 0;
+                driveHead(BB_HEAD_INIT_POS - g_headPos);
             }
             
             if (roam_counter > BB_ROAM_LIMIT)
@@ -631,7 +636,7 @@ int main( int argc, char** argv )
                 roam_counter = 0;
                 setSpeed(-1, -1);
                 delay(1000);
-                rotatePlatform(90 + rand() % 181);
+                rotatePlatform((90 + alpha) * sign);
                 setSpeed(1, 1);
             }
             delay(10);
