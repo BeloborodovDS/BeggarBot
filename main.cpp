@@ -374,7 +374,7 @@ void resetRobot()
   driveDegs(BB_HEAD_INIT_POS, BB_PIN_HEAD);
   g_headPos = BB_HEAD_INIT_POS;
   frown(0);
-  driveDegs(90, BB_PIN_ARM);
+  driveDegs(45, BB_PIN_ARM);
   delay(2000);
 }
 
