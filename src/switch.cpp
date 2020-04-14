@@ -3,7 +3,7 @@
 
 #include <wiringPi.h>
 
-#include "constants.h"
+#include "../include/constants.h"
 
 int main(int argc, char **argv)
 {
@@ -17,11 +17,12 @@ int main(int argc, char **argv)
   pinMode(BB_PIN_SWITCH, INPUT);
   pullUpDnControl(BB_PIN_SWITCH, PUD_UP);
   
+  std_msgs::Bool msg;
+  
   ROS_INFO("Switch node initialized");
 
   while (ros::ok())
   {
-    std_msgs::Bool msg;
     msg.data = (digitalRead(BB_PIN_SWITCH) != 1);
     
     chatter_pub.publish(msg);
