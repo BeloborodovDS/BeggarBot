@@ -52,13 +52,6 @@ struct thread_pointers_t
     vector<TrackingBox> *trfaces;
 };
 
-//struct used in a separate thread to read from IR sensors
-struct thread_sensors_t
-{
-    mcp3008Spi *adc;
-    std::atomic<float> *values;
-};
-
 //drive servo PIN at angle ANGLE for SG90 servo
 //angle: [0,180], pin: PIN_BASE(controller)+SERVO_NUM(0-15) or PIN_BASE(controller)+16 for all servos
 void driveDegs(float angle, int pin)
@@ -178,28 +171,6 @@ void rotatePlatform(float degrees)
     delay(1000 * sign * degrees / BB_DEG_PER_SECOND);
     setSpeedLeft(0);
     setSpeedRight(0);
-}
-
-//analog read from MCP3008 ADC chip
-//adc: mcp3008Spi object
-//channel: 0..7
-unsigned int analogRead(mcp3008Spi &adc, unsigned char channel)
-{
-  unsigned char spi_data[3];
-  unsigned int val = 0;
-  
-  if (channel > 8) return -1;
-  //write sequence
-  spi_data[0] = 1;  //start bit
-  spi_data[1] = 0b10000000 |( channel << 4); //mode and channel
-  spi_data[2] = 0; //anything
-  adc.spiWriteRead(spi_data, sizeof(spi_data) );
-  //read value, combine last two bits of second byte with whole third byte
-  val = 0;
-  val = (spi_data[1]<< 8) & 0b1100000000; 
-  val |=  (spi_data[2] & 0xff);
-  
-  return val;
 }
 
 //calc IOU between two rects
@@ -340,34 +311,6 @@ void* get_frames(void* pointers)
     pthread_exit((void*) 0);
 }
 
-/* Read values from IR sensors in a thread 
- process them with EWMA*/
-void* get_sensors(void* pointers)
-{
-    float left=0, right=0;
-    thread_sensors_t* pnt = (thread_sensors_t*) pointers;
-    
-    // initial read
-    left = analogRead(*(pnt->adc), BB_IR_LEFT) / BB_IR_SCALER_LEFT;
-    right = analogRead(*(pnt->adc), BB_IR_RIGHT) / BB_IR_SCALER_RIGHT;
-    pnt->values[0] = left;
-    pnt->values[1] = right;
-    delay(10);
-    
-    // other reads
-    while(is_running)
-    {
-        // read and update by EWMA
-        left = analogRead(*(pnt->adc), BB_IR_LEFT) / BB_IR_SCALER_LEFT;
-        right = analogRead(*(pnt->adc), BB_IR_RIGHT) / BB_IR_SCALER_RIGHT;
-        left = left*BB_EWMA_GAMMA + (pnt->values[0])*(1-BB_EWMA_GAMMA);
-        right = right*BB_EWMA_GAMMA + (pnt->values[1])*(1-BB_EWMA_GAMMA);
-        pnt->values[0] = left;
-        pnt->values[1] = right;
-        delay(10);
-    }
-}
-
 //set initial position
 void resetRobot()
 {
@@ -445,22 +388,6 @@ int follow_face(thread_pointers_t* pointers)
   
   // moving robot
   return BB_FACE_BUSY;
-}
-
-// set "is_running" as a read from switch
-void* track_button(void*)
-{
-    pinMode(BB_PIN_SWITCH, INPUT);
-    pullUpDnControl(BB_PIN_SWITCH, PUD_UP);
-    
-    int button;
-    
-    while (is_running)
-    {
-        button = digitalRead(BB_PIN_SWITCH);
-        if (button == 1) is_running = false;
-        delay(50);
-    }
 }
 
 int main( int argc, char** argv )

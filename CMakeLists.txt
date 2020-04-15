@@ -6,6 +6,8 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
   FILES
   SensorData.msg
+  DetectionBox.msg
+  DetectionList.msg
 )
   
 generate_messages(DEPENDENCIES std_msgs)
@@ -22,3 +24,7 @@ add_dependencies(switch_node ${PROJECT_NAME}_generate_messages_cpp)
 add_executable(sensor_node src/sensor.cpp submodules/mcp3008/mcp3008Spi.cpp)
 target_link_libraries(sensor_node ${catkin_LIBRARIES})
 add_dependencies(sensor_node ${PROJECT_NAME}_generate_messages_cpp)
+
+add_executable(camera_node src/camera.cpp)
+target_link_libraries(camera_node ${catkin_LIBRARIES})
+add_dependencies(camera_node ${PROJECT_NAME}_generate_messages_cpp)
