@@ -189,36 +189,6 @@ float rect_dist(Rect rect1, Rect rect2)
     return sqrt((p1.x-p2.x)*(p1.x-p2.x)+(p1.y-p2.y)*(p1.y-p2.y));
 }
 
-/* function to parse SSD detector output
- * @param predictions: output buffer of SSD net 
- * @param numPred: maximum number of SSD predictions (from net config)
- * @param w,h: target image height and width
- * @param thresh: detection threshold
- * @param probs, boxes: resulting confidences and bounding boxes
- */
-void get_detection_boxes(const float* predictions, int numPred, int w, int h, float thresh, 
-                                                std::vector<float>& probs, std::vector<cv::Rect>& boxes)
-{
-    float score = 0;
-    float cls = 0;
-    float id = 0;
-    
-    //predictions holds numPred*7 values
-    //data format: image_id, detection_class, detection_confidence, box_normed_x, box_normed_y, box_normed_w, box_normed_h
-    for (int i=0; i<numPred; i++)
-    {
-      score = predictions[i*7+2];
-      cls = predictions[i*7+1];
-      id = predictions[i*7  ];
-      if (id>=0 && score>thresh && cls<=1)
-      {
-        probs.push_back(score);
-        boxes.push_back(Rect(predictions[i*7+3]*w, predictions[i*7+4]*h,
-                    (predictions[i*7+5]-predictions[i*7+3])*w, 
-                    (predictions[i*7+6]-predictions[i*7+4])*h));
-      }
-    }
-}
 
 /* Threaded frame read and processing for NCS input
  */
