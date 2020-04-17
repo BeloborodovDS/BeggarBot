@@ -6,7 +6,11 @@ SET(OPENVINO_INCLUDE "${OPENVINO_PATH}/deployment_tools/inference_engine/include
 cmake_minimum_required(VERSION 2.8.3)
 project(beggar_bot)
 find_package(catkin REQUIRED COMPONENTS 
-  roscpp std_msgs genmsg message_generation)
+  roscpp 
+  std_msgs 
+  genmsg 
+  message_generation
+  roslib)
 find_package(OpenCV REQUIRED)
 
 add_message_files(

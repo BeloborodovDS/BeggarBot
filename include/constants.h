@@ -1,7 +1,7 @@
 //Face detection
 #define BB_RAW_WIDTH                        1280
 #define BB_RAW_HEIGHT                       960
-#define BB_FACE_MODEL                       "./data/face_vino"
+#define BB_FACE_MODEL                       "/data/face_vino"
 
 //Camera field of view
 #define BB_HFOV                                 62.2 * 0.8

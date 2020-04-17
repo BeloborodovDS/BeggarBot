@@ -1,9 +1,3 @@
-#include <opencv2/core/core.hpp>
-#include <opencv2/highgui/highgui.hpp>
-#include <opencv2/video/video.hpp>
-
-#include <raspicam/raspicam.h>
-
 #include <iostream>
 #include <fstream>
 #include <set>
@@ -18,39 +12,14 @@
 #include <wiringPi.h>
 #include "submodules/mcp3008/mcp3008Spi.h"
 
-#include <inference_engine.hpp>
-#include "ncs_wrapper/vino_wrapper.hpp"
-#include "submodules/sort-cpp/sort-c++/SORTtracker.h"
-
 #include "constants.h"
 
-using namespace cv;
 using namespace std;
-using namespace InferenceEngine;
 
 std::atomic_bool is_running;  //is used to stop threads from main()
 pthread_mutex_t face_vector_mutex;    //mutex for shared face vectors (probs and faces)
 
 float g_headPos; //head position
-
-/* Struct to pass to threads
- * camera: pointer to RaspiCam camera
- * buffer: pointer to shared image buffer
- * face_processed: flag to process data only once
- * ncs: pointer to NCSWrapper instance
- * faces, probs: pointers to shared face and prob vectors
- * trfaces: pointers to tracked faces and auxilary values
- */
-struct thread_pointers_t
-{
-    raspicam::RaspiCam *camera;
-    unsigned char *buffer;
-    std::atomic_bool *face_processed;
-    NCSWrapper *ncs;
-    vector<Rect> *faces;
-    vector<float> *probs;
-    vector<TrackingBox> *trfaces;
-};
 
 //drive servo PIN at angle ANGLE for SG90 servo
 //angle: [0,180], pin: PIN_BASE(controller)+SERVO_NUM(0-15) or PIN_BASE(controller)+16 for all servos
@@ -173,114 +142,6 @@ void rotatePlatform(float degrees)
     setSpeedRight(0);
 }
 
-//calc IOU between two rects
-float rect_iou(Rect rect1, Rect rect2)
-{
-    float inter = (rect1 & rect2).area();
-    if (inter <= 0) return 0;
-    return inter/(rect1.area() + rect2.area() - inter);
-}
-
-//calc distance between two rects
-float rect_dist(Rect rect1, Rect rect2)
-{
-    Point p1 = 0.5*(rect1.tl()+rect1.br());
-    Point p2 = 0.5*(rect2.tl()+rect2.br());
-    return sqrt((p1.x-p2.x)*(p1.x-p2.x)+(p1.y-p2.y)*(p1.y-p2.y));
-}
-
-
-/* Threaded frame read and processing for NCS input
- */
-void* get_frames(void* pointers)
-{
-    //fps evaluation
-    int nframes=0;
-    int64 start = getTickCount();
-    thread_pointers_t* pnt = (thread_pointers_t*) pointers;
-    int H = pnt->ncs->netInputHeight, W = pnt->ncs->netInputWidth;  //net input image size
-    
-    unsigned char* frame_data = NULL; //raw frame
-        
-    float* ncs_output = NULL; //ncs output buffer is provided by wrapper
-    bool success = false;
-    
-    SORTtracker tracker(TRACKING_MAX_AGE, TRACKING_MIN_HITS, TRACKING_MIN_IOU);
-    bool first_detections = true;  //flag used to init tracker
-    vector<Rect_<float> > tmp_det;  //convenience vector for type conversion
-    
-    while(is_running)
-    {
-        //get raw frame and create Mat for it
-        pnt->camera->grab();           
-        frame_data = pnt->camera->getImageBufferData();
-        Mat frame(BB_RAW_HEIGHT, BB_RAW_WIDTH, CV_8UC3, frame_data);
-        
-        //Create Mats for existing shared image buffers (for convenience)
-        Mat data_mat(H, W, CV_8UC3, pnt->buffer);
-        
-        //resize frame into shared buffer
-        resize(frame, data_mat, Size(W,H), 0, 0, INTER_NEAREST);
-        
-        //load image into NCS
-        success = pnt->ncs->load_tensor_nowait(data_mat);
-        if(!success)
-        {
-            pnt->ncs->print_error_code();
-            break;
-        }
-        
-        //now LOCK until result arrives
-        if(!pnt->ncs->get_result(ncs_output))
-        {
-            pnt->ncs->print_error_code();
-            break;
-        }
-        
-        //get result into shared vactors
-        pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
-        
-        //get detections from NCS
-        pnt->faces->clear();
-        pnt->probs->clear();
-        tmp_det.clear();
-        get_detection_boxes(ncs_output, pnt->ncs->maxNumDetectedFaces, 
-                                                W, H, 0.2, *(pnt->probs), *(pnt->faces));
-        
-        //copy to tmp_det to transform type
-        for (int i=0; i<pnt->faces->size(); i++)
-        {
-            Rect_<float> r = (*(pnt->faces))[i];
-            if ((*(pnt->probs))[i] > 0)
-                tmp_det.push_back(r);
-        }
-        
-        //if first detections ever: init tracker if possible
-        if (pnt->faces->size()>0 && first_detections)
-        {
-            tracker.init(tmp_det);
-            first_detections = false;
-        }
-        
-        //if tracker initialized, track faces
-        if (!first_detections)
-        {
-            pnt->trfaces->clear();
-            tracker.step(tmp_det, *(pnt->trfaces));
-        }
-        
-        *(pnt->face_processed) = false;
-        
-        pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
-    
-        nframes++;
-    }
-    //report fps and exit
-    double time = (getTickCount()-start)/getTickFrequency();
-    cout<<"Frame processing FPS: "<<nframes/time<<endl;
-    pthread_exit((void*) 0);
-}
-
 //set initial position
 void resetRobot()
 {
@@ -367,68 +228,7 @@ int main( int argc, char** argv )
     
     int found_face = BB_NO_FACE;
     
-    //NCS interface
-    NCSWrapper NCS(true);
-    //Start communication with NCS
-    if (!NCS.load_file(BB_FACE_MODEL))
-    {
-        cout<<"Cannot load graph file"<<endl;
-        return 0;
-    }
-    
-    //get image size from neural network
-    int H=NCS.netInputHeight, W=NCS.netInputWidth;
-    int HW3 =H*W*3;  
-    
-    //Init camera
-    //setup camera
-    raspicam::RaspiCam Camera;
-    Camera.setFormat(raspicam::RASPICAM_FORMAT_BGR);
-    Camera.setVideoStabilization(true);
-    Camera.setExposure(raspicam::RASPICAM_EXPOSURE_ANTISHAKE);
-    Camera.setAWB(raspicam::RASPICAM_AWB_SHADE);
-    
-    if ( !Camera.open() ) 
-    {
-        cout<<"Error opening camera"<<endl;
-        return 0;
-    }
-    cout<<"Connected to camera ="<<Camera.getId() <<endl;
-    
-    //allocate and reset SHARED image buffers
-    //use buffer 0 to write transformed data
-    //use buffer 1 to read data
-    unsigned char* image_buffer = new unsigned char [HW3]; 
-    for (int i=0; i<HW3; i++)  image_buffer[i] = 0;
-
-    //Convenience Mat
-    Mat display_frame(H, W, CV_8UC3); // SHARED
-    
-    //SHARED face and prob vectors
-    vector<Rect> face_vector;
-    vector<float> prob_vector;
-    //SHARED tracked_faces vector
-    vector<TrackingBox> tracked_faces;
-    
     std::atomic_bool face_processed (true);
-
-    //init all mutex
-    pthread_mutex_init(&face_vector_mutex, NULL);
-    
-    //setup structure to pass to face thread
-    thread_pointers_t thread_pointers;
-    thread_pointers.buffer = image_buffer;
-    thread_pointers.face_processed = &face_processed;
-    thread_pointers.camera = &Camera;
-    thread_pointers.ncs = &NCS;
-    thread_pointers.faces = &face_vector;
-    thread_pointers.probs = &prob_vector;
-    thread_pointers.trfaces = &tracked_faces;
-    
-    //set threads to be JOINABLE
-    pthread_attr_t threadAttr;
-    pthread_attr_init(&threadAttr);
-    pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_JOINABLE);
   
     //setup WiringPi
     wiringPiSetup();
@@ -444,40 +244,12 @@ int main( int argc, char** argv )
     // Reset all output
     pca9685PWMReset(pca_fd);
     cout<<"PCA9685 controller connected"<<endl;
-     
-    //declare and init MCP3008 analog-digital converter with default params
-    mcp3008Spi ADC;
-    cout<<"MCP3008 chip init"<<endl;
-    
-    std::atomic<float> IR_values[2];
-    
-    //setup structure to pass to face thread
-    thread_sensors_t thread_sensors_pnt;
-    thread_sensors_pnt.adc = &ADC;
-    thread_sensors_pnt.values = IR_values;
     
     resetRobot();
     cout<<"Robot reset"<<endl;
     
-    g_headPos = BB_HEAD_INIT_POS;
-    
     //-------------------------------------------------MAIN BODY-----------------------------------------------------------
-    
-    //launch threads
-    pthread_t thread_get_frames, thread_get_sensors, thread_track_button;
-    int err = 0;
-    err = pthread_create(&thread_get_frames, &threadAttr, get_frames, (void*)&thread_pointers);
-    if (err)
-        cout<<"Failed to create get_frames process with code "<<err<<endl;
-    err = pthread_create(&thread_get_sensors, &threadAttr, get_sensors, (void*)&thread_sensors_pnt);
-    if (err)
-        cout<<"Failed to create get_sensors process with code "<<err<<endl;
-    err = pthread_create(&thread_track_button, &threadAttr, track_button, (void*)NULL);
-    if (err)
-        cout<<"Failed to create track_button process with code "<<err<<endl;
-    
-    //cleanup
-    pthread_attr_destroy(&threadAttr);
+
     
     // for navigation
     float left=0, right=0, alpha=0, sign=1;
@@ -575,26 +347,12 @@ int main( int argc, char** argv )
     }
     
     setSpeed(0, 0);
-    
-    //join threads
-    err = pthread_join(thread_get_frames, NULL);
-    if (err)
-        cout<<"Failed to join get_frames process with code "<<err<<endl;
-    err = pthread_join(thread_get_sensors, NULL);
-    if (err)
-        cout<<"Failed to join get_sensors process with code "<<err<<endl;
-    err = pthread_join(thread_track_button, NULL);
-    if (err)
-        cout<<"Failed to join track_button process with code "<<err<<endl;
 
 
     //--------------------------------------------RESET--------------------------------------------------
-    delete [] image_buffer;
-    pthread_mutex_destroy(&face_vector_mutex);
     
     resetRobot();
     cout<<"Final reset."<<endl;
-    Camera.release();
     
     pca9685PWMReset(pca_fd);
     

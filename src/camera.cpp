@@ -1,4 +1,5 @@
 #include "ros/ros.h"
+#include "ros/package.h"
 #include "beggar_bot/DetectionBox.h"
 #include "beggar_bot/DetectionList.h"
 
@@ -57,13 +58,14 @@ int main(int argc, char **argv)
     DetectionBox box;
   
     //Start communication with NCS
-    NCSWrapper NCS(true);
-    if (!NCS.load_file(BB_FACE_MODEL))
+    NCSWrapper NCS(false);
+    std::string model_path = ros::package::getPath("beggar_bot") + BB_FACE_MODEL;
+    if (!NCS.load_file(model_path))
     {
-        ROS_ERROR("Camera node: cannot load graph file");
+        ROS_ERROR_STREAM("Camera node: cannot load graph file " + model_path);
         return 0;
     }
-    ROS_INFO("Camera node: loaded graph file %s", BB_FACE_MODEL);
+    ROS_INFO_STREAM("Camera node: loaded graph file " + model_path);
     
     //Init camera
     //setup camera
@@ -77,14 +79,10 @@ int main(int argc, char **argv)
         ROS_ERROR("Camera node: Error opening camera");
         return 0;
     }
-    ROS_INFO("Camera node: Connected to camera = %s", Camera.getId());
+    ROS_INFO_STREAM("Camera node: Connected to camera = " + Camera.getId());
     
     SORTtracker tracker(TRACKING_MAX_AGE, TRACKING_MIN_HITS, TRACKING_MIN_IOU);
     bool first_detections = true;  //flag used to init tracker
-    
-    int count = 0;
-    int64 start = getTickCount();
-    double time = 0;
 
     int H = NCS.netInputHeight, W = NCS.netInputWidth;  // net input image size
     Mat data_mat(H, W, CV_8UC3);
@@ -95,6 +93,10 @@ int main(int argc, char **argv)
     vector<Rect_<float>> face_vector;
     vector<float> prob_vector;
     vector<TrackingBox> tracked_faces;
+    
+    int count = 0;
+    int64 start = getTickCount();
+    double time = 0;
   
     ROS_INFO("Camera node initialized");
 
@@ -146,7 +148,7 @@ int main(int argc, char **argv)
         if (count > 0 and count % 100 == 0) 
         {
             time = (getTickCount() - start) / getTickFrequency();
-            ROS_INFO("Camera node: FPS   %d", count / time);
+            ROS_INFO("Camera node: FPS   %f", count / time);
         }
         
         // build ROS message
@@ -168,7 +170,6 @@ int main(int argc, char **argv)
     }
     
     Camera.release();
-    ROS_INFO("Camera node: camera released");
 
     return 0;
 }
