@@ -19,6 +19,12 @@ add_message_files(
   DetectionBox.msg
   DetectionList.msg)
   
+add_service_files(
+  FILES
+  ServoAction.srv
+  ServoSpeed.srv
+  ServoHeadPlatform.srv)
+  
 generate_messages(DEPENDENCIES std_msgs)
 
 catkin_package(CATKIN_DEPENDS message_runtime)
@@ -83,4 +89,20 @@ target_link_libraries(camera_node
     dl
     inference_engine)
 add_dependencies(camera_node 
+    ${PROJECT_NAME}_generate_messages_cpp)
+    
+# SERVO NODE
+add_executable(servo_node 
+    src/servo.cpp)
+target_compile_options(servo_node 
+    PRIVATE 
+    -march=armv7-a 
+    -std=c++11 
+    -O3 
+    -Wno-psabi)
+target_link_libraries(servo_node 
+    ${catkin_LIBRARIES}
+    wiringPi
+    wiringPiPca9685)
+add_dependencies(servo_node 
     ${PROJECT_NAME}_generate_messages_cpp)

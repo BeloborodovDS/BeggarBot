@@ -65,3 +65,11 @@
 
 #define BB_ROAM_LIMIT 100
 
+// actions for servo node
+#define BB_ACTION_RESET 0
+#define BB_ACTION_RESET_HEAD 1
+#define BB_ACTION_SHAKE 2
+#define BB_ACTION_FROWN_KIND 3
+#define BB_ACTION_FROWN_NEUTRAL 4
+#define BB_ACTION_FROWN_ANGRY 5
+

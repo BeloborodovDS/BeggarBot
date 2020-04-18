@@ -1,0 +1,4 @@
+float32 head_delta
+float32 platform_delta
+---
+bool head_success

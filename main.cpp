@@ -6,151 +6,13 @@
 #include <atomic>
 #include <unistd.h>
 
-#include <pthread.h>
-
-#include "pca9685.h"
-#include <wiringPi.h>
-#include "submodules/mcp3008/mcp3008Spi.h"
-
 #include "constants.h"
 
 using namespace std;
 
 std::atomic_bool is_running;  //is used to stop threads from main()
-pthread_mutex_t face_vector_mutex;    //mutex for shared face vectors (probs and faces)
 
 float g_headPos; //head position
-
-//drive servo PIN at angle ANGLE for SG90 servo
-//angle: [0,180], pin: PIN_BASE(controller)+SERVO_NUM(0-15) or PIN_BASE(controller)+16 for all servos
-void driveDegs(float angle, int pin)
-{
-  if (angle<0) angle = 0;
-  if (angle>180) angle = 180;
-  int ticks = (int)(BB_PCA_MAX_PWM * (angle/180.0f*(BB_SERVO_MS_MAX-BB_SERVO_MS_MIN) + BB_SERVO_MS_MIN) / 20.0f + 0.5); //20ms is pulse width (~50 hz)
-  pwmWrite(pin, ticks);
-}
-
-//drive servo by pulse width value
-void driveMs(float Ms, int pin)
-{
-  float cycleMs = 1000.0f / BB_PCA_HERTZ;
-  int ticks = (int)(BB_PCA_MAX_PWM * Ms / cycleMs + 0.5f);
-  pwmWrite(pin, ticks);
-}
-
-//move eyebrows: 
-// 0 for neutral expression
-// >0 for kind expression
-// <0 for angry expression
-void frown(int mode)
-{
-  if(mode==0)
-    driveDegs(60, BB_PIN_EYEBROW);
-  else if (mode>0)
-    driveDegs(25, BB_PIN_EYEBROW);
-  else
-    driveDegs(100, BB_PIN_EYEBROW);
-  delay(1000);
-}
-
-//shake hand
-void shake()
-{
-  driveDegs(65, BB_PIN_ARM);
-  delay(500);
-  driveDegs(90, BB_PIN_ARM);
-  delay(500);
-  driveDegs(115, BB_PIN_ARM);
-  delay(500);
-  driveDegs(90, BB_PIN_ARM);
-  delay(500);
-}
-
-
-//Drive head from g_headPos to g_headPos+delta_angle with specified speed
-//speed is ratio from SERVO_MAX_SPEED, in [0,1]
-void driveHead(float delta_angle, float speed = 0.1)
-{
-  // limits
-  if (speed > 1) speed = 1;
-  if (speed < 0) speed = 0;
-  float an_from = g_headPos, an_to = g_headPos+delta_angle;
-  if (an_to > BB_HEAD_MAX_LIMIT) an_to = BB_HEAD_MAX_LIMIT;
-  if (an_to < BB_HEAD_MIN_LIMIT) an_to = BB_HEAD_MIN_LIMIT;
-  if (an_from < 0) an_from = 0;
-  if (an_from > 180) an_from = 180;
-  
-  float step = BB_HEAD_MAX_STEP*speed; //deg step for each time span
-  
-  if (an_from < an_to)  
-    while(an_from < an_to) //forward
-    {
-      an_from += step;
-      driveDegs(an_from, BB_PIN_HEAD);
-      delay(BB_HEAD_DT);
-    }
-  else
-    while(an_from > an_to) //backwards
-    {
-      an_from -= step;
-      driveDegs(an_from, BB_PIN_HEAD);
-      delay(BB_HEAD_DT);
-    }
-    
-  //fix imprecise position
-  driveDegs(an_to, BB_PIN_HEAD);
-  g_headPos = an_to;
-  
-  delay(BB_HEAD_DT);
-}
-
-//speed: [-1, 1]: 1 => full forward, -1 => full backwards 
-void setSpeedLeft(float speed)
-{
-  if (speed > 1) speed = 1;
-  if (speed < -1) speed = -1;
-  int ticks = (int)(BB_PCA_MAX_PWM * (0.5*(speed+1)*(BB_CONT_MS_MAX-BB_CONT_MS_MIN) + BB_CONT_MS_MIN) / 20.0f + 0.5); //20ms is pulse width (~50 hz)
-  pwmWrite(BB_PIN_LEFT_MOTOR, ticks);
-}
-
-//speed: [-1, 1]: 1 => full forward, -1 => full backwards 
-void setSpeedRight(float speed)
-{
-  if (speed > 1) speed = 1;
-  if (speed < -1) speed = -1;
-  speed *= -1; //symmetry
-  int ticks = (int)(BB_PCA_MAX_PWM * (0.5*(speed+1)*(BB_CONT_MS_MAX-BB_CONT_MS_MIN) + BB_CONT_MS_MIN) / 20.0f + 0.5); //20ms is pulse width (~50 hz)
-  pwmWrite(BB_PIN_RIGHT_MOTOR, ticks);
-}
-
-//set speed for left and right wheels
-void setSpeed(float speed_left, float speed_right)
-{
-  setSpeedLeft(speed_left);
-  setSpeedRight(speed_right);  
-}
-
-//rotate platform: > 0: clockwise, < 0: counter-clockwise
-void rotatePlatform(float degrees)
-{
-    float sign = 2*float(degrees >= 0)  - 1;
-    setSpeedLeft(sign);
-    setSpeedRight(-sign);
-    delay(1000 * sign * degrees / BB_DEG_PER_SECOND);
-    setSpeedLeft(0);
-    setSpeedRight(0);
-}
-
-//set initial position
-void resetRobot()
-{
-  driveDegs(BB_HEAD_INIT_POS, BB_PIN_HEAD);
-  g_headPos = BB_HEAD_INIT_POS;
-  frown(0);
-  driveDegs(45, BB_PIN_ARM);
-  delay(2000);
-}
 
 // find closest to center face and try to align to it
 int follow_face(thread_pointers_t* pointers)
@@ -229,24 +91,6 @@ int main( int argc, char** argv )
     int found_face = BB_NO_FACE;
     
     std::atomic_bool face_processed (true);
-  
-    //setup WiringPi
-    wiringPiSetup();
-    
-    // Setup PCA with pinbase 300 and i2c location 0x40 (default for pca9685)
-    // PWM period for SG90 servos is 20ms (50Hz)
-    int pca_fd = pca9685Setup(BB_PCA_PIN_BASE, 0x40, BB_PCA_HERTZ);
-    if (pca_fd < 0)
-    {
-        cout<<"Error in init PCA9685!"<<endl;
-        return 0;
-    }
-    // Reset all output
-    pca9685PWMReset(pca_fd);
-    cout<<"PCA9685 controller connected"<<endl;
-    
-    resetRobot();
-    cout<<"Robot reset"<<endl;
     
     //-------------------------------------------------MAIN BODY-----------------------------------------------------------
 
@@ -345,16 +189,6 @@ int main( int argc, char** argv )
             delay(10);
         }
     }
-    
-    setSpeed(0, 0);
-
-
-    //--------------------------------------------RESET--------------------------------------------------
-    
-    resetRobot();
-    cout<<"Final reset."<<endl;
-    
-    pca9685PWMReset(pca_fd);
     
     return 0;
 }
