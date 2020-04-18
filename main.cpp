@@ -17,6 +17,7 @@ float g_headPos; //head position
 // find closest to center face and try to align to it
 int follow_face(thread_pointers_t* pointers)
 {
+    // TODO: remove H, W
   int H = pointers->ncs->netInputHeight, W = pointers->ncs->netInputWidth;  //net input image size
   float y = 0, x = 0, dist=0, mindist=100000, sign = 0;
   TrackingBox trbox, best_trbox;

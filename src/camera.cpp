@@ -1,7 +1,8 @@
+#include <cmath>
+
 #include "ros/ros.h"
 #include "ros/package.h"
 #include "beggar_bot/DetectionBox.h"
-#include "beggar_bot/DetectionList.h"
 
 #include <opencv2/core/core.hpp>
 #include <raspicam/raspicam.h>
@@ -21,7 +22,7 @@ using namespace beggar_bot;
  * @param thresh: detection threshold
  * @param probs, boxes: resulting confidences and bounding boxes
  */
-void get_detection_boxes(const float* predictions, int numPred, int w, int h, float thresh,
+void get_detection_boxes(const float* predictions, int numPred, float thresh,
                          vector<float>& probs, vector<Rect_<float>>& boxes)
 {
     float score = 0, cls = 0, id = 0;
@@ -37,10 +38,10 @@ void get_detection_boxes(const float* predictions, int numPred, int w, int h, fl
         {
             probs.push_back(score);
             boxes.push_back(Rect_<float>(
-                predictions[i*7+3] * w, 
-                predictions[i*7+4] * h,
-                (predictions[i*7+5] - predictions[i*7+3]) * w, 
-                (predictions[i*7+6] - predictions[i*7+4]) * h
+                predictions[i*7+3], 
+                predictions[i*7+4],
+                (predictions[i*7+5] - predictions[i*7+3]), 
+                (predictions[i*7+6] - predictions[i*7+4])
             ));
         }
     }
@@ -51,11 +52,10 @@ int main(int argc, char **argv)
 {
     ros::init(argc, argv, "camera_node");
     ros::NodeHandle n;
-    ros::Publisher chatter_pub = n.advertise<DetectionList>("camera_state", 1);
+    ros::Publisher chatter_pub = n.advertise<DetectionBox>("camera_state", 1);
     ros::Rate loop_rate(1000);
-    
-    DetectionList msg;
-    DetectionBox box;
+
+    DetectionBox msg;
   
     //Start communication with NCS
     NCSWrapper NCS(false);
@@ -93,6 +93,7 @@ int main(int argc, char **argv)
     vector<Rect_<float>> face_vector;
     vector<float> prob_vector;
     vector<TrackingBox> tracked_faces;
+    TrackingBox best_trbox;
     
     int count = 0;
     int64 start = getTickCount();
@@ -127,8 +128,7 @@ int main(int argc, char **argv)
         // decode detections from NCS
         face_vector.clear();
         prob_vector.clear();
-        get_detection_boxes(ncs_output, NCS.maxNumDetectedFaces, 
-                            W, H, 0.2, prob_vector, face_vector);
+        get_detection_boxes(ncs_output, NCS.maxNumDetectedFaces, 0.2, prob_vector, face_vector);
         
         // if first detections ever: init tracker if possible
         if (face_vector.size()>0 && first_detections)
@@ -144,24 +144,33 @@ int main(int argc, char **argv)
             tracker.step(face_vector, tracked_faces);
         }
         
+        float x=0, y=0, dist=0, mindist=1000000;
+        for (int i=0; i<tracked_faces.size(); i++)
+        {
+            y = tracked_faces[i].box.y + tracked_faces[i].box.height/2;
+            x = tracked_faces[i].box.x + tracked_faces[i].box.width/2;
+            dist = std::abs(y - 0.5) + std::abs(x - 0.5);
+            if (dist < mindist)
+            {
+                mindist = dist; 
+                best_trbox = tracked_faces[i];
+            }
+        }
+        
         // report FPS
-        if (count > 0 and count % 100 == 0) 
+        if (count > 0 and count % 300 == 0) 
         {
             time = (getTickCount() - start) / getTickFrequency();
             ROS_INFO("Camera node: FPS   %f", count / time);
         }
         
         // build ROS message
+        msg.present = (tracked_faces.size() > 0);
         msg.count = count;
-        msg.detections.clear();
-        for (int i = 0; i < tracked_faces.size(); i++) 
-        {
-            box.x = tracked_faces[i].box.x;
-            box.y = tracked_faces[i].box.y;
-            box.width = tracked_faces[i].box.width;
-            box.height = tracked_faces[i].box.height;
-            msg.detections.push_back(box);
-        }
+        msg.x = best_trbox.box.x;
+        msg.y = best_trbox.box.y;
+        msg.width = best_trbox.box.width;
+        msg.height = best_trbox.box.height;
     
         chatter_pub.publish(msg);
         ros::spinOnce();

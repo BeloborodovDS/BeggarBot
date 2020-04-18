@@ -1,3 +1,5 @@
+int64 count
+bool present
 float32 x
 float32 y
 float32 width
