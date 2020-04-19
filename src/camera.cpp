@@ -53,7 +53,6 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "camera_node");
     ros::NodeHandle n;
     ros::Publisher chatter_pub = n.advertise<DetectionBox>("camera_state", 1);
-    ros::Rate loop_rate(1000);
 
     DetectionBox msg;
   
@@ -62,7 +61,7 @@ int main(int argc, char **argv)
     std::string model_path = ros::package::getPath("beggar_bot") + BB_FACE_MODEL;
     if (!NCS.load_file(model_path))
     {
-        ROS_ERROR_STREAM("Camera node: cannot load graph file " + model_path);
+        ROS_ERROR_STREAM("Camera node: failed to load graph file " + model_path);
         return 0;
     }
     ROS_INFO_STREAM("Camera node: loaded graph file " + model_path);
@@ -76,7 +75,7 @@ int main(int argc, char **argv)
     Camera.setAWB(raspicam::RASPICAM_AWB_SHADE);
     if ( !Camera.open() ) 
     {
-        ROS_ERROR("Camera node: Error opening camera");
+        ROS_ERROR("Camera node: failed to open camera");
         return 0;
     }
     ROS_INFO_STREAM("Camera node: Connected to camera = " + Camera.getId());
@@ -114,7 +113,7 @@ int main(int argc, char **argv)
         //load image into NCS
         if (!NCS.load_tensor_nowait(data_mat))
         {
-            ROS_ERROR("Camera node: an error occured in NCS (load tensor)");
+            ROS_ERROR("Camera node: an error occured in NCS (load_tensor_nowait)");
             break;
         }
         
@@ -144,8 +143,9 @@ int main(int argc, char **argv)
             tracker.step(face_vector, tracked_faces);
         }
         
+        // find closest to center face
         float x=0, y=0, dist=0, mindist=1000000;
-        for (int i=0; i<tracked_faces.size(); i++)
+        for (int i = 0; i < tracked_faces.size(); i++)
         {
             y = tracked_faces[i].box.y + tracked_faces[i].box.height/2;
             x = tracked_faces[i].box.x + tracked_faces[i].box.width/2;
@@ -174,7 +174,6 @@ int main(int argc, char **argv)
     
         chatter_pub.publish(msg);
         ros::spinOnce();
-        loop_rate.sleep();
         count ++;
     }
     
