@@ -1,11 +1,14 @@
 #include <cmath>
+#include <atomic>
+#include <unistd.h>
 
 #include "ros/ros.h"
 #include "ros/package.h"
 #include "beggar_bot/DetectionBox.h"
+#include "std_srvs/Empty.h"
 
-#include <opencv2/core/core.hpp>
-#include <raspicam/raspicam.h>
+#include "opencv2/core/core.hpp"
+#include "raspicam/raspicam.h"
 
 #include "ncs_wrapper/vino_wrapper.hpp"
 #include "../submodules/sort-cpp/sort-c++/SORTtracker.h"
@@ -14,6 +17,15 @@
 
 using namespace cv;
 using namespace beggar_bot;
+
+std::atomic_bool is_running;
+
+bool terminate_node(std_srvs::Empty::Request  &req, std_srvs::Empty::Response &ignored)
+{
+    ROS_INFO("Camera node terminated");
+    is_running = false;
+    return true;
+}
 
 /* function to parse SSD detector output
  * @param predictions: output buffer of SSD net 
@@ -50,9 +62,12 @@ void get_detection_boxes(const float* predictions, int numPred, float thresh,
 
 int main(int argc, char **argv)
 {
+    is_running = true;
+    
     ros::init(argc, argv, "camera_node");
     ros::NodeHandle n;
     ros::Publisher chatter_pub = n.advertise<DetectionBox>("camera_state", 1);
+    ros::ServiceServer term = n.advertiseService("terminate_camera", terminate_node);
 
     DetectionBox msg;
   
@@ -100,7 +115,7 @@ int main(int argc, char **argv)
   
     ROS_INFO("Camera node initialized");
 
-    while (ros::ok())
+    while (is_running && ros::ok())
     {
         //get raw frame and create Mat for it
         Camera.grab();           
@@ -179,5 +194,6 @@ int main(int argc, char **argv)
     
     Camera.release();
 
+    usleep(500000);
     return 0;
 }

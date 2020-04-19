@@ -7,7 +7,8 @@ cmake_minimum_required(VERSION 2.8.3)
 project(beggar_bot)
 find_package(catkin REQUIRED COMPONENTS 
   roscpp 
-  std_msgs 
+  std_msgs
+  std_srvs
   genmsg 
   message_generation
   roslib)
@@ -25,7 +26,9 @@ add_service_files(
   ServoSpeed.srv
   ServoHeadPlatform.srv)
   
-generate_messages(DEPENDENCIES std_msgs)
+generate_messages(DEPENDENCIES 
+    std_msgs
+    std_srvs)
 
 catkin_package(CATKIN_DEPENDS message_runtime)
 

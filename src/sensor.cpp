@@ -1,9 +1,22 @@
+#include <atomic>
+#include <unistd.h>
+
 #include "ros/ros.h"
 #include "beggar_bot/SensorData.h"
+#include "std_srvs/Empty.h"
+
+#include "../submodules/mcp3008/mcp3008Spi.h"
 
 #include "../include/constants.h"
 
-#include "../submodules/mcp3008/mcp3008Spi.h"
+std::atomic_bool is_running;
+
+bool terminate_node(std_srvs::Empty::Request  &req, std_srvs::Empty::Response &ignored)
+{
+    ROS_INFO("Sensor node terminated");
+    is_running = false;
+    return true;
+}
 
 // analog read from MCP3008 ADC chip
 // adc: mcp3008Spi object
@@ -30,9 +43,12 @@ unsigned int analogRead(mcp3008Spi &adc, unsigned char channel)
 
 int main(int argc, char **argv)
 {
+  is_running = true;
+    
   ros::init(argc, argv, "sensor_node");
   ros::NodeHandle n;
   ros::Publisher chatter_pub = n.advertise<beggar_bot::SensorData>("sensor_state", 1);
+  ros::ServiceServer term = n.advertiseService("terminate_sensor", terminate_node);
   ros::Rate loop_rate(100);
   
   float left=0, right=0, left_new=0, right_new=0;
@@ -47,7 +63,7 @@ int main(int argc, char **argv)
   right = analogRead(ADC, BB_IR_RIGHT) / BB_IR_SCALER_RIGHT;
   loop_rate.sleep();
 
-  while (ros::ok())
+  while (is_running && ros::ok())
   {
     // read sensor data and scale each sensor
     left_new = analogRead(ADC, BB_IR_LEFT) / BB_IR_SCALER_LEFT;
@@ -66,5 +82,6 @@ int main(int argc, char **argv)
     loop_rate.sleep();
   }
 
+  usleep(500000);
   return 0;
 }

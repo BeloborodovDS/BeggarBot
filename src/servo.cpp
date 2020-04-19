@@ -1,10 +1,13 @@
 #include <future>
 #include <cmath>
+#include <atomic>
+#include <unistd.h>
 
 #include "ros/ros.h"
 #include "beggar_bot/ServoAction.h"
 #include "beggar_bot/ServoSpeed.h"
 #include "beggar_bot/ServoHeadPlatform.h"
+#include "std_srvs/Empty.h"
 
 #include "wiringPi.h"
 #include "pca9685.h"
@@ -13,6 +16,15 @@
 
 using namespace beggar_bot;
 using namespace std;
+
+std::atomic_bool is_running;
+
+bool terminate_node(std_srvs::Empty::Request  &req, std_srvs::Empty::Response &ignored)
+{
+    ROS_INFO("Servo node terminated");
+    is_running = false; 
+    return true;
+}
 
 float g_headPos; //head position
 
@@ -178,11 +190,14 @@ bool servo_head_platform(ServoHeadPlatform::Request  &req, ServoHeadPlatform::Re
 
 int main(int argc, char **argv)
 {
+    is_running = true;
+    
     ros::init(argc, argv, "servo_node");
     ros::NodeHandle n;
     ros::ServiceServer action_service = n.advertiseService("servo_action", servo_action);
     ros::ServiceServer speed_service = n.advertiseService("servo_speed", servo_speed);
     ros::ServiceServer head_platform_service = n.advertiseService("servo_head_platform", servo_head_platform);
+    ros::ServiceServer term = n.advertiseService("terminate_servo", terminate_node);
     
     //setup WiringPi
     wiringPiSetup();
@@ -200,10 +215,14 @@ int main(int argc, char **argv)
     reset();
     
     ROS_INFO("Servo node and PCA9685 initialized");
-    ros::spin();
+    while (is_running && ros::ok())
+    {
+        ros::spinOnce();
+    }
     
     reset();
     pca9685PWMReset(pca_fd);
     
+    usleep(500000);
     return 0;
 }
