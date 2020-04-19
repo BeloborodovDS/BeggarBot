@@ -1,5 +1,0 @@
-wiringPi
-OpenCV 3.4.3 optimized for RPi: https://www.pyimagesearch.com/2017/10/09/optimizing-opencv-on-the-raspberry-pi/
-raspicam 0.1.6: http://www.uco.es/investiga/grupos/ava/node/40
-PCA9685 PWM controller: https://github.com/Reinbert/pca9685
-MCP3008 ADC chip: https://github.com/halherta/RaspberryPi-mcp3008Spi
