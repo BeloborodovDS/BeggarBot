@@ -109,3 +109,17 @@ target_link_libraries(servo_node
     wiringPiPca9685)
 add_dependencies(servo_node 
     ${PROJECT_NAME}_generate_messages_cpp)
+    
+# MAIN NODE
+add_executable(beggar_bot 
+    src/robot.cpp)
+target_compile_options(beggar_bot 
+    PRIVATE 
+    -march=armv7-a 
+    -std=c++11 
+    -O3 
+    -Wno-psabi)
+target_link_libraries(beggar_bot 
+    ${catkin_LIBRARIES})
+add_dependencies(beggar_bot 
+    ${PROJECT_NAME}_generate_messages_cpp)

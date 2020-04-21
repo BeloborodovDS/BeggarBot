@@ -6,8 +6,20 @@ Dependencies:
 * <a href="https://github.com/Reinbert/pca9685" target="_blank">PCA9685 PWM controller</a>
 * see submodules folder
 
+Build:
+
+~~~
+catkin_make [-j1]
+~~~
+
 Download OpenVINO model for face detection: 
 
 ~~~
 ./download_model.bash
+~~~
+
+Launch:
+
+~~~
+roslaunch beggar_bot robot.launch
 ~~~

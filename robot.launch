@@ -1,0 +1,8 @@
+<launch>
+    <node pkg="beggar_bot" type="switch_node" name="switch_node" output="screen"/>
+    <node pkg="beggar_bot" type="camera_node" name="camera_node" output="screen"/>
+    <node pkg="beggar_bot" type="servo_node" name="servo_node" output="screen"/>
+    <node pkg="beggar_bot" type="sensor_node" name="sensor_node" output="screen"/>
+    <node pkg="beggar_bot" type="beggar_bot" name="beggar_bot" output="screen"/>
+</launch>
+
