@@ -5,7 +5,7 @@
 
 //Camera field of view
 #define BB_HFOV                                 62.2 * 0.8
-#define BB_VFOV                                 48.8 * 0.8
+#define BB_VFOV                                 48.8 * 0.7
 
 //Platform
 #define BB_DEG_PER_SECOND       99.0
@@ -60,8 +60,8 @@
 #define BB_FOUND_FACE 3
 #define BB_FACE_LIMIT 4
 
-#define BB_FOLLOW_TOLERANCE  0.015
-#define BB_FACE_AREA 0.012
+#define BB_FOLLOW_TOLERANCE  4.5
+#define BB_FACE_AREA 1000.0
 
 #define BB_ROAM_LIMIT 100
 

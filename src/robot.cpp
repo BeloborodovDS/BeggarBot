@@ -1,5 +1,6 @@
 #include <atomic>
 #include <unistd.h>
+#include <cmath>
 
 #include "ros/ros.h"
 
@@ -20,6 +21,9 @@ using namespace beggar_bot;
 std::atomic_bool is_running;
 std::atomic_bool face_processed;
 
+float leftSensor, rightSensor;
+DetectionBox face;
+
 void terminator_callback(const std_msgs::Bool::ConstPtr& msg)
 {
     ROS_INFO("Beggar Bot: caught TERMINATOR");
@@ -28,92 +32,76 @@ void terminator_callback(const std_msgs::Bool::ConstPtr& msg)
 
 void sensor_callback(const SensorData::ConstPtr& msg)
 {
-    ; //ROS_INFO("sensor_callback: %f, %f", msg->left, msg->right);
+    leftSensor = msg->left;
+    rightSensor = msg->right;
 }
 
 void camera_callback(const DetectionBox::ConstPtr& msg)
 {
-    ; //ROS_INFO("camera_callback: %f, %f, %f, %f, %f, %f", 
-             //(float) (msg->count), (float) (msg->present), msg->x, msg->y, msg->width, msg->height);
+    face = *msg;
+    face_processed = false;
 }
 
-
-/*
-int follow_face()
+int follow_face(ros::ServiceClient &client_head_platform, ServoHeadPlatform &srv_head_platform)
 {
-    // TODO: remove H, W
-    int H = pointers->ncs->netInputHeight, W = pointers->ncs->netInputWidth;  //net input image size
-    float y = 0, x = 0, dist=0, mindist=100000, sign = 0;
-    TrackingBox trbox, best_trbox;
-  
+    float x = 0, y = 0;
+    
     // wait for another processed frame
-    while ( *(pointers->face_processed))
-        delay(10);
-    *(pointers->face_processed) = true;
-  
-    // find face closest to frame center
-    pthread_mutex_lock(&face_vector_mutex);//________________LOCK_____________________________
-    for (int i=0; i<pointers->trfaces->size(); i++)
+    while (face_processed)
     {
-        trbox = (*(pointers->trfaces))[i];
-        y = trbox.box.y + trbox.box.height/2;
-        x = trbox.box.x + trbox.box.width/2;
-        dist = abs(y - H/2.0) + abs(x - W/2.0);
-        if (dist < mindist)
-        {
-            mindist = dist; 
-            best_trbox = trbox;
-        }
+        ros::spinOnce();
     }
-    pthread_mutex_unlock(&face_vector_mutex);//________________UNLOCK________________________________
+    face_processed = true;
   
     // no face detected
-    if (mindist >= 100000)
+    if (!face.present)
         return BB_NO_FACE;
   
     // calculate displace of face center from frame center
-    y = best_trbox.box.y + best_trbox.box.height/2 - H/2.0;
-    y = y*BB_VFOV/H;
-    sign = float(y>=0)*2 - 1;
+    y = face.y + 0.5*face.height - 0.5;
+    y = y*BB_VFOV;
   
-    x = best_trbox.box.x + best_trbox.box.width/2 - W/2.0;
-    x = x*BB_HFOV/W;
-  
-    // cannot move head further
-    if ((g_headPos+sign < BB_HEAD_MIN_LIMIT) or (g_headPos+sign > BB_HEAD_MAX_LIMIT))
-        return BB_FACE_LIMIT;
-  
+    x = face.x + 0.5*face.width - 0.5;
+    x = x*BB_HFOV;
+    
     // close enough to center
-    if ((abs(y) < BB_FOLLOW_TOLERANCE * H) and (abs(x) < BB_FOLLOW_TOLERANCE * W))
+    if ((abs(y) < BB_FOLLOW_TOLERANCE) and (abs(x) < BB_FOLLOW_TOLERANCE))
     {
         // too small face
-        if (best_trbox.box.height * best_trbox.box.width / (H*W) < BB_FACE_AREA)
+        if (face.height * face.width < BB_FACE_AREA)
             return BB_FACE_FAR;
         else
             return BB_FOUND_FACE;
     }
+    
+    // move robot (head - vertical plane, platform - horizontal plane)
+    srv_head_platform.request.head_delta = y;
+    srv_head_platform.request.platform_delta = x;
+    client_head_platform.call(srv_head_platform);
+    usleep(50000);
+    
+    // face is off limits, cannot reach
+    if (!srv_head_platform.response.head_success)
+        return BB_FACE_LIMIT;
   
-    // rotate platform and move head asynchronously
-    auto waitRotation = std::async(std::launch::async, rotatePlatform, x);
-    driveHead(y, 0.1);
-    waitRotation.wait();
-    delay(200);
-  
-    // wait for next processed frame just in case
-    while ( *(pointers->face_processed))
-        delay(10);
-    *(pointers->face_processed) = true;
+    // skip next frame just in case
+    while (face_processed)
+    {
+        ros::spinOnce();
+    }
+    face_processed = true;
   
     // moving robot
     return BB_FACE_BUSY;
 }
-*/
 
 int main( int argc, char** argv )
 {
     is_running = true;
     face_processed = true;
     int found_face = BB_NO_FACE;
+    leftSensor = 0;
+    rightSensor = 0;
     
     ros::init(argc, argv, "beggar_bot");
     ros::NodeHandle n;
@@ -129,8 +117,11 @@ int main( int argc, char** argv )
     ros::ServiceClient client_head_platform = n.serviceClient<ServoHeadPlatform>("servo_head_platform");
     ServoHeadPlatform srv_head_platform;
     
-    usleep(1000000); // wait for nodes
+    usleep(5000000); // wait for nodes
     
+    ROS_INFO("Beggar Bot initialized");
+    
+    /*
     srv_action.request.action = BB_ACTION_SHAKE;
     client_action.call(srv_action);
     
@@ -153,9 +144,14 @@ int main( int argc, char** argv )
     srv_speed.request.left = 0;
     srv_speed.request.right = 0;
     client_speed.call(srv_speed);
+    */
     
     while (is_running && ros::ok())
     {
+        int status = follow_face(client_head_platform, srv_head_platform);
+        
+        ROS_INFO("Status %f", (float) status);
+        
         ros::spinOnce();
     }
     
