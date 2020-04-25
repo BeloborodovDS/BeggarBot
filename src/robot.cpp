@@ -25,6 +25,8 @@ std::atomic_bool face_processed;
 float left_sensor, right_sensor;
 DetectionBox face;
 
+float left_speed, right_speed;
+
 void terminator_callback(const std_msgs::Bool::ConstPtr& msg)
 {
     ROS_INFO("Beggar Bot: caught TERMINATOR");
@@ -96,11 +98,16 @@ int follow_face(ros::ServiceClient &client_head_platform, ServoHeadPlatform &srv
     return BB_FACE_BUSY;
 }
 
-void call_speed(ros::ServiceClient client_speed, ServoSpeed srv_speed, float left_speed, float right_speed)
+void call_speed(ros::ServiceClient client_speed, ServoSpeed srv_speed, float new_left_speed, float new_right_speed)
 {
-    srv_speed.request.left = left_speed;
-    srv_speed.request.right = right_speed;
-    client_speed.call(srv_speed);
+    if (abs(new_left_speed - left_speed) + abs(new_right_speed - right_speed) > 1e-3)
+    {
+        srv_speed.request.left = new_left_speed;
+        srv_speed.request.right = new_right_speed;
+        client_speed.call(srv_speed);
+        left_speed = new_left_speed;
+        right_speed = new_right_speed;
+    }
 }
 
 void call_action(ros::ServiceClient client_action, ServoAction srv_action, unsigned char action)
@@ -115,6 +122,8 @@ void call_platform(ros::ServiceClient client_head_platform,
     srv_head_platform.request.head_delta = 0;
     srv_head_platform.request.platform_delta = platform;
     client_head_platform.call(srv_head_platform);
+    left_speed = 0;
+    right_speed = 0;
 }
 
 int main( int argc, char** argv )
@@ -122,6 +131,8 @@ int main( int argc, char** argv )
     is_running = true;
     face_processed = true;
     int found_face = BB_NO_FACE;
+    left_speed = 0;
+    right_speed = 0;
     // for navigation
     left_sensor = 0;
     right_sensor = 0;
@@ -192,7 +203,9 @@ int main( int argc, char** argv )
         }
         // no face of face too far: random exploration
         else
-        {     
+        {
+            ros::spinOnce();
+            
             alpha = rand() % 91; // [0, 90]
             sign = (rand() % 2) * 2 - 1; // {-1, 1}
             
