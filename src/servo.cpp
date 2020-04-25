@@ -69,7 +69,7 @@ void shake()
 
 // Drive head from g_headPos to g_headPos+delta_angle with specified speed
 // speed is ratio from SERVO_MAX_SPEED, in [0,1]
-bool driveHead(float delta_angle, float speed = 0.2)
+bool driveHead(float delta_angle, float speed = 0.5)
 {
     // on the limit - cannot move in this direction
     float sign = 1e-3 * (float(delta_angle>=0) * 2 - 1);

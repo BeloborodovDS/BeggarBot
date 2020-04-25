@@ -1,6 +1,7 @@
 #include <atomic>
 #include <unistd.h>
 #include <cmath>
+#include <cstdlib>
 
 #include "ros/ros.h"
 
@@ -21,7 +22,7 @@ using namespace beggar_bot;
 std::atomic_bool is_running;
 std::atomic_bool face_processed;
 
-float leftSensor, rightSensor;
+float left_sensor, right_sensor;
 DetectionBox face;
 
 void terminator_callback(const std_msgs::Bool::ConstPtr& msg)
@@ -32,8 +33,8 @@ void terminator_callback(const std_msgs::Bool::ConstPtr& msg)
 
 void sensor_callback(const SensorData::ConstPtr& msg)
 {
-    leftSensor = msg->left;
-    rightSensor = msg->right;
+    left_sensor = msg->left;
+    right_sensor = msg->right;
 }
 
 void camera_callback(const DetectionBox::ConstPtr& msg)
@@ -78,7 +79,7 @@ int follow_face(ros::ServiceClient &client_head_platform, ServoHeadPlatform &srv
     srv_head_platform.request.head_delta = y;
     srv_head_platform.request.platform_delta = x;
     client_head_platform.call(srv_head_platform);
-    usleep(50000);
+    usleep(100000);
     
     // face is off limits, cannot reach
     if (!srv_head_platform.response.head_success)
@@ -95,13 +96,37 @@ int follow_face(ros::ServiceClient &client_head_platform, ServoHeadPlatform &srv
     return BB_FACE_BUSY;
 }
 
+void call_speed(ros::ServiceClient client_speed, ServoSpeed srv_speed, float left_speed, float right_speed)
+{
+    srv_speed.request.left = left_speed;
+    srv_speed.request.right = right_speed;
+    client_speed.call(srv_speed);
+}
+
+void call_action(ros::ServiceClient client_action, ServoAction srv_action, unsigned char action)
+{
+    srv_action.request.action = action;
+    client_action.call(srv_action);
+}
+
+void call_platform(ros::ServiceClient client_head_platform, 
+                   ServoHeadPlatform srv_head_platform, float platform)
+{
+    srv_head_platform.request.head_delta = 0;
+    srv_head_platform.request.platform_delta = platform;
+    client_head_platform.call(srv_head_platform);
+}
+
 int main( int argc, char** argv )
 {
     is_running = true;
     face_processed = true;
     int found_face = BB_NO_FACE;
-    leftSensor = 0;
-    rightSensor = 0;
+    // for navigation
+    left_sensor = 0;
+    right_sensor = 0;
+    float alpha=0, sign=1;
+    int roam_counter = 0;
     
     ros::init(argc, argv, "beggar_bot");
     ros::NodeHandle n;
@@ -117,40 +142,99 @@ int main( int argc, char** argv )
     ros::ServiceClient client_head_platform = n.serviceClient<ServoHeadPlatform>("servo_head_platform");
     ServoHeadPlatform srv_head_platform;
     
-    usleep(5000000); // wait for nodes
+    usleep(7000000); // wait for nodes
     
     ROS_INFO("Beggar Bot initialized");
     
-    /*
-    srv_action.request.action = BB_ACTION_SHAKE;
-    client_action.call(srv_action);
-    
-    srv_action.request.action = BB_ACTION_FROWN_ANGRY;
-    client_action.call(srv_action);
-    
-    srv_head_platform.request.head_delta = -25;
-    srv_head_platform.request.platform_delta = -25;
-    client_head_platform.call(srv_head_platform);
-    
-    srv_speed.request.left = -1;
-    srv_speed.request.right = 1;
-    client_speed.call(srv_speed);
-    
-    usleep(3000000);
-    
-    srv_action.request.action = BB_ACTION_RESET_HEAD;
-    client_action.call(srv_action);
-    
-    srv_speed.request.left = 0;
-    srv_speed.request.right = 0;
-    client_speed.call(srv_speed);
-    */
-    
     while (is_running && ros::ok())
     {
-        int status = follow_face(client_head_platform, srv_head_platform);
+        // while face is seen, align to it
+        found_face = follow_face(client_head_platform, srv_head_platform);
+        while (found_face == BB_FACE_BUSY and is_running)
+        {
+            found_face = follow_face(client_head_platform, srv_head_platform);
+            ROS_INFO("HEAD    %f", (float) found_face);
+        }
         
-        ROS_INFO("Status %f", (float) status);
+        // face detected => perform
+        if (found_face == BB_FOUND_FACE)
+        {
+            // stop, shake and detect face again
+            roam_counter = 0;
+            call_speed(client_speed, srv_speed, 0, 0);
+            call_action(client_action, srv_action, BB_ACTION_SHAKE);
+            usleep(1000000);
+            found_face = follow_face(client_head_platform, srv_head_platform);
+            // if face is gone, angry frown, else shake again
+            if (found_face == BB_NO_FACE)
+            {
+                call_action(client_action, srv_action, BB_ACTION_FROWN_ANGRY);
+            }
+            else
+            {
+                call_action(client_action, srv_action, BB_ACTION_FROWN_KIND);
+                call_action(client_action, srv_action, BB_ACTION_SHAKE);
+                usleep(1000000);
+            }
+            // turn and go
+            call_action(client_action, srv_action, BB_ACTION_RESET_HEAD);
+            call_platform(client_head_platform, srv_head_platform, 180);
+            call_action(client_action, srv_action, BB_ACTION_FROWN_NEUTRAL);
+        }
+        // if face over limit => angry frown
+        else if (found_face == BB_FACE_LIMIT)
+        {
+            roam_counter = 0;
+            call_speed(client_speed, srv_speed, 0, 0);
+            call_action(client_action, srv_action, BB_ACTION_FROWN_ANGRY);
+            usleep(1000000);
+            call_platform(client_head_platform, srv_head_platform, 180);
+        }
+        // no face of face too far: random exploration
+        else
+        {     
+            alpha = rand() % 91; // [0, 90]
+            sign = (rand() % 2) * 2 - 1; // {-1, 1}
+            
+            // obstacles far: go forward
+            if (left_sensor < 1 and right_sensor < 1)
+            {
+                call_speed(client_speed, srv_speed, 1, 1);
+                roam_counter ++;
+            }
+            // obstacles close: random rotate [90, 180] u [-180, -90]
+            else if (left_sensor >=1 and right_sensor >=1)
+            {
+                call_platform(client_head_platform, srv_head_platform, (90 + alpha) * sign);
+                roam_counter = 0;
+                call_action(client_action, srv_action, BB_ACTION_RESET_HEAD);
+            }
+            // obstacles to the right: rotate left 
+            else if (left_sensor > right_sensor)
+            {
+                call_platform(client_head_platform, srv_head_platform, alpha);
+                roam_counter = 0;
+                call_action(client_action, srv_action, BB_ACTION_RESET_HEAD);
+            }
+            // obstacles to the left: rotate right
+            else
+            {
+                call_platform(client_head_platform, srv_head_platform, - alpha);
+                roam_counter = 0;
+                call_action(client_action, srv_action, BB_ACTION_RESET_HEAD);
+            }
+            
+            // if going forward for too long (stuck): go back a little and random rotate
+            if (roam_counter > BB_ROAM_LIMIT)
+            {
+                roam_counter = 0;
+                call_speed(client_speed, srv_speed, -1, -1);
+                usleep(1000000);
+                call_platform(client_head_platform, srv_head_platform, (90 + alpha) * sign);
+                call_speed(client_speed, srv_speed, 1, 1);
+            }
+            usleep(10000);
+        }
         
         ros::spinOnce();
     }
@@ -165,106 +249,6 @@ int main( int argc, char** argv )
     terminate_sensor.call(srv_terminate);
     terminate_camera.call(srv_terminate);
     terminate_servo.call(srv_terminate);
-    
-    //-------------------------------------------------MAIN BODY-----------------------------------------------------------
-    
-    /*
-    // for navigation
-    float left=0, right=0, alpha=0, sign=1;
-    int roam_counter = 0;
-    
-    //main cycle
-    while(is_running)
-    {
-        // while face is seen, align to it
-        found_face = follow_face(&thread_pointers);
-        while (found_face == BB_FACE_BUSY and is_running)
-            found_face = follow_face(&thread_pointers);
-        
-        // read sensors
-        left = IR_values[0];
-        right = IR_values[1];
-        
-        // face detected => perform
-        if (found_face == BB_FOUND_FACE)
-        {
-            // stop, shake and detect face again
-            roam_counter = 0;
-            setSpeed(0, 0);
-            shake();
-            delay(1000);
-            found_face = follow_face(&thread_pointers);
-            // if face is gone, angry frown, else shake again
-            if (found_face == BB_NO_FACE)
-                frown(-1);
-            else
-            {
-                frown(1);
-                shake();
-                delay(1000);
-            }
-            // turn and go
-            driveHead(BB_HEAD_INIT_POS - g_headPos);
-            rotatePlatform(180);
-            frown(0);
-        }
-        // if face over limit => angry frown
-        else if (found_face == BB_FACE_LIMIT)
-        {
-            roam_counter = 0;
-            setSpeed(0, 0);
-            frown(-1);
-            delay(1000);
-            rotatePlatform(180);
-        }
-        // no face of face too far: random exploration
-        else
-        {     
-            alpha = rand() % 91; // [0, 90]
-            sign = (rand() % 2) * 2 - 1; // {-1, 1}
-            
-            // obstacles far: go forward
-            if (left < 1 and right < 1)
-            {
-                setSpeed(1, 1);
-                roam_counter ++;
-            }
-            // obstacles close: random rotate [90, 180] u [-180, -90]
-            else if (left >=1 and right >=1)
-            {
-                rotatePlatform((90 + alpha) * sign);
-                roam_counter = 0;
-                driveHead(BB_HEAD_INIT_POS - g_headPos);
-            }
-            // obstacles to the right: rotate left 
-            else if (left > right)
-            {
-                rotatePlatform(alpha);
-                roam_counter = 0;
-                driveHead(BB_HEAD_INIT_POS - g_headPos);
-            }
-            // obstacles to the left: rotate right
-            else
-            {
-                rotatePlatform(-alpha);
-                roam_counter = 0;
-                driveHead(BB_HEAD_INIT_POS - g_headPos);
-            }
-            
-            // if going forward for too long (stuck): go back a little and random rotate
-            if (roam_counter > BB_ROAM_LIMIT)
-            {
-                roam_counter = 0;
-                setSpeed(-1, -1);
-                delay(1000);
-                rotatePlatform((90 + alpha) * sign);
-                setSpeed(1, 1);
-            }
-            delay(10);
-        }
-    }
-    
-    */
     
     return 0;
 }
