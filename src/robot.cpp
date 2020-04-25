@@ -210,13 +210,13 @@ int main( int argc, char** argv )
             sign = (rand() % 2) * 2 - 1; // {-1, 1}
             
             // obstacles far: go forward
-            if (left_sensor < 1 and right_sensor < 1)
+            if (left_sensor < BB_IR_THRESHOLD and right_sensor < BB_IR_THRESHOLD)
             {
                 call_speed(client_speed, srv_speed, 1, 1);
-                roam_counter ++;
+                roam_counter++;
             }
             // obstacles close: random rotate [90, 180] u [-180, -90]
-            else if (left_sensor >=1 and right_sensor >=1)
+            else if (left_sensor >= BB_IR_THRESHOLD and right_sensor >= BB_IR_THRESHOLD)
             {
                 call_platform(client_head_platform, srv_head_platform, (90 + alpha) * sign);
                 roam_counter = 0;

@@ -52,6 +52,7 @@
 #define BB_IR_SCALER_LEFT       468.25
 #define BB_IR_SCALER_RIGHT      442.72
 #define BB_EWMA_GAMMA           0.7
+#define BB_IR_THRESHOLD         1.1
 
 //face search status
 #define BB_NO_FACE 0
