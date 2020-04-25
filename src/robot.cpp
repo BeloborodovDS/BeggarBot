@@ -79,7 +79,7 @@ int follow_face(ros::ServiceClient &client_head_platform, ServoHeadPlatform &srv
     srv_head_platform.request.head_delta = y;
     srv_head_platform.request.platform_delta = x;
     client_head_platform.call(srv_head_platform);
-    usleep(100000);
+    usleep(300000);
     
     // face is off limits, cannot reach
     if (!srv_head_platform.response.head_success)
