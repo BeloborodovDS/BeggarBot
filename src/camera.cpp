@@ -30,7 +30,6 @@ bool terminate_node(std_srvs::Empty::Request  &req, std_srvs::Empty::Response &i
 /* function to parse SSD detector output
  * @param predictions: output buffer of SSD net 
  * @param numPred: maximum number of SSD predictions (from net config)
- * @param w,h: target image height and width
  * @param thresh: detection threshold
  * @param probs, boxes: resulting confidences and bounding boxes
  */
