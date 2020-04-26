@@ -164,7 +164,6 @@ int main( int argc, char** argv )
         while (found_face == BB_FACE_BUSY and is_running)
         {
             found_face = follow_face(client_head_platform, srv_head_platform);
-            ROS_INFO("HEAD    %f", (float) found_face);
         }
         
         // face detected => perform
