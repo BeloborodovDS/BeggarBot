@@ -4,6 +4,8 @@
 
 This cute robot roams around the room and kindly asks for money.
 
+[Project details (russian)](https://habr.com/ru/post/500150/) 
+
 ### Tech
 
 1. Core
